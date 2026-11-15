@@ -1385,27 +1385,64 @@ export const restoreAppState = (
   };
 };
 
-const restoreLibraryItem = (libraryItem: LibraryItem): LibraryItem | null => {
+const restoreLibraryItem = (
+  libraryItem: LibraryItem,
+  files?: BinaryFiles,
+): LibraryItem | null => {
   const elements = getNonDeletedElements(
     restoreElements(libraryItem.elements, null),
   );
-  return elements.length ? { ...libraryItem, elements } : null;
+  if (!elements.length) {
+    return null;
+  }
+  const itemFiles = pickFilesForElements(
+    elements,
+    libraryItem.files && files
+      ? { ...files, ...libraryItem.files }
+      : libraryItem.files || files,
+  );
+  return {
+    ...libraryItem,
+    elements,
+    ...(itemFiles ? { files: itemFiles } : {}),
+  };
+};
+
+/** keeps only the files the item's image elements point at */
+const pickFilesForElements = (
+  elements: LibraryItem["elements"],
+  files?: BinaryFiles,
+) => {
+  if (!files) {
+    return null;
+  }
+  const picked: BinaryFiles = {};
+  for (const element of elements) {
+    if (element.type === "image" && element.fileId && files[element.fileId]) {
+      picked[element.fileId] = files[element.fileId];
+    }
+  }
+  return Object.keys(picked).length ? picked : null;
 };
 
 export const restoreLibraryItems = (
   libraryItems: ImportedDataState["libraryItems"] = [],
   defaultStatus: LibraryItem["status"],
+  files?: BinaryFiles,
 ) => {
   const restoredItems: LibraryItem[] = [];
   for (const item of libraryItems) {
     // migrate older libraries
     if (Array.isArray(item)) {
-      const restoredItem = restoreLibraryItem({
-        status: defaultStatus,
-        elements: item,
-        id: randomId(),
-        created: Date.now(),
-      });
+      const restoredItem = restoreLibraryItem(
+        {
+          status: defaultStatus,
+          elements: item,
+          id: randomId(),
+          created: Date.now(),
+        },
+        files,
+      );
       if (restoredItem) {
         restoredItems.push(restoredItem);
       }
@@ -1414,12 +1451,15 @@ export const restoreLibraryItems = (
         LibraryItem,
         "id" | "status" | "created"
       >;
-      const restoredItem = restoreLibraryItem({
-        ..._item,
-        id: _item.id || randomId(),
-        status: _item.status || defaultStatus,
-        created: _item.created || Date.now(),
-      });
+      const restoredItem = restoreLibraryItem(
+        {
+          ..._item,
+          id: _item.id || randomId(),
+          status: _item.status || defaultStatus,
+          created: _item.created || Date.now(),
+        },
+        files,
+      );
       if (restoredItem) {
         restoredItems.push(restoredItem);
       }

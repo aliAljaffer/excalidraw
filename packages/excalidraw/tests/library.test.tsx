@@ -240,6 +240,67 @@ describe("library", () => {
     // this has a high flake
     // expect(h.state.activeTool.type).toBe("selection");
   });
+
+  it("keeps image files on library items", async () => {
+    const fileId = "imageFile1";
+    const dataURL =
+      "data:image/svg+xml;base64," +
+      btoa('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>');
+    const libraryJSON = JSON.stringify({
+      type: "excalidrawlib",
+      version: 2,
+      source: "test",
+      libraryItems: [
+        {
+          id: "imageItem",
+          status: "published",
+          created: 0,
+          name: "logo",
+          elements: [
+            API.createElement({
+              type: "image",
+              id: "imageElement",
+              fileId,
+              status: "saved",
+              width: 10,
+              height: 10,
+            }),
+          ],
+        },
+      ],
+      files: {
+        [fileId]: {
+          id: fileId,
+          mimeType: "image/svg+xml",
+          dataURL,
+          created: 0,
+        },
+      },
+    });
+
+    const libraryItems = parseLibraryJSON(libraryJSON);
+    expect(libraryItems[0].files).toEqual({ [fileId]: expect.anything() });
+    expect(JSON.parse(serializeLibraryAsJSON(libraryItems)).files).toEqual({
+      [fileId]: expect.anything(),
+    });
+
+    await API.drop([
+      {
+        kind: "string",
+        value: libraryJSON,
+        type: MIME_TYPES.excalidrawlib,
+      },
+    ]);
+
+    await waitFor(() => {
+      expect(h.elements).toEqual([
+        expect.objectContaining({ type: "image", fileId }),
+      ]);
+      expect(h.app.files[fileId]).toEqual(
+        expect.objectContaining({ mimeType: "image/svg+xml" }),
+      );
+    });
+  });
 });
 
 describe("library menu", () => {

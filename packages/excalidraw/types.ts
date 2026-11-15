@@ -662,6 +662,8 @@ export type LibraryItem = {
   created: number;
   name?: string;
   error?: string;
+  /** binary files the item's image elements reference */
+  files?: BinaryFiles;
 };
 export type LibraryItems = readonly LibraryItem[];
 export type LibraryItems_anyVersion = LibraryItems | LibraryItems_v1;

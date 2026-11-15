@@ -32,6 +32,16 @@ server {
     try_files $uri =404;
   }
 
+  # Icon libraries: ~12 MiB of base64 svg, merged into the browser library on
+  # first load and only refetched when the manifest version changes.
+  location /libraries/ {
+    gzip on;
+    gzip_types application/json;
+    gzip_min_length 1024;
+    add_header Cache-Control "no-cache" always;
+    try_files $uri =404;
+  }
+
   location /fonts/ {
     expires 1y;
     try_files $uri =404;

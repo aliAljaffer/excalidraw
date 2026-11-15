@@ -78,6 +78,7 @@ import type {
 import type { ResolutionType } from "@excalidraw/common/utility-types";
 import type { ResolvablePromise } from "@excalidraw/common/utils";
 
+import { useIconLibraries } from "./useIconLibraries";
 
 import CustomStats from "./CustomStats";
 import {
@@ -487,6 +488,7 @@ const ExcalidrawWrapper = () => {
     migrationAdapter: LibraryLocalStorageMigrationAdapter,
   });
 
+  useIconLibraries(excalidrawAPI);
 
   const [, forceRefresh] = useState(false);
 

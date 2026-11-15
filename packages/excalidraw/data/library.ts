@@ -39,6 +39,7 @@ import type App from "../components/App";
 import type {
   LibraryItems,
   LibraryItem,
+  BinaryFiles,
   ExcalidrawImperativeAPI,
   LibraryItemsSource,
   LibraryItems_anyVersion,
@@ -402,6 +403,19 @@ class Library {
 
 export default Library;
 
+/** binary files the library items' image elements reference, if any */
+export const getLibraryItemsFiles = (
+  libraryItems: LibraryItems,
+): BinaryFiles | null => {
+  const files: BinaryFiles = {};
+  for (const item of libraryItems) {
+    if (item.files) {
+      Object.assign(files, item.files);
+    }
+  }
+  return Object.keys(files).length ? files : null;
+};
+
 export const distributeLibraryItemsOnSquareGrid = (
   libraryItems: LibraryItems,
 ) => {
@@ -592,7 +606,9 @@ let lastSavedLibraryItemsHash = 0;
 let librarySaveCounter = 0;
 
 const getLibraryItemHash = (item: LibraryItem) => {
-  return `${item.id}:${item.name || ""}:${hashElementsVersion(item.elements)}`;
+  return `${item.id}:${item.name || ""}:${
+    item.files ? Object.keys(item.files).join() : ""
+  }:${hashElementsVersion(item.elements)}`;
 };
 
 export const getLibraryItemsHash = (items: LibraryItems) => {

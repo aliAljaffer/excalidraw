@@ -19,6 +19,7 @@ export const LibraryUnit = memo(
     name,
     showName,
     elements,
+    files,
     isPending,
     onClick,
     selected,
@@ -31,6 +32,7 @@ export const LibraryUnit = memo(
     /** render larger, with the name below the item */
     showName?: boolean;
     elements?: LibraryItem["elements"];
+    files?: LibraryItem["files"];
     isPending?: boolean;
     onClick: (id: LibraryItem["id"] | null) => void;
     selected: boolean;
@@ -39,7 +41,7 @@ export const LibraryUnit = memo(
     svgCache: SvgCache;
   }) => {
     const ref = useRef<HTMLDivElement | null>(null);
-    const svg = useLibraryItemSvg(id, elements, svgCache, ref);
+    const svg = useLibraryItemSvg(id, elements, files, svgCache, ref);
 
     const [isHovered, setIsHovered] = useState(false);
     const isMobile = useEditorInterface().formFactor === "phone";

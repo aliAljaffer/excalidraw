@@ -27,6 +27,7 @@ import { trackEvent } from "../analytics";
 import { useUIAppState } from "../context/ui-appState";
 import {
   distributeLibraryItemsOnSquareGrid,
+  getLibraryItemsFiles,
   libraryItemsAtom,
 } from "../data/library";
 import { atom, useAtom } from "../editor-jotai";
@@ -250,7 +251,6 @@ const usePendingElementsMemo = (
  */
 export const LibraryMenu = memo(() => {
   const app = useApp();
-  const { onInsertElements } = app;
   const appProps = useAppProps();
   const appState = useUIAppState();
   const setAppState = useExcalidrawSetAppState();
@@ -305,10 +305,14 @@ export const LibraryMenu = memo(() => {
 
   const onInsertLibraryItems = useCallback(
     (libraryItems: LibraryItems) => {
-      onInsertElements(distributeLibraryItemsOnSquareGrid(libraryItems));
+      app.addElementsFromPasteOrLibrary({
+        elements: distributeLibraryItemsOnSquareGrid(libraryItems),
+        files: getLibraryItemsFiles(libraryItems),
+        position: "center",
+      });
       app.focusContainer();
     },
-    [onInsertElements, app],
+    [app],
   );
 
   const deselectItems = useCallback(() => {

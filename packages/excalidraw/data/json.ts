@@ -135,11 +135,15 @@ export const isValidLibrary = (json: any): json is ImportedLibraryData => {
 };
 
 export const serializeLibraryAsJSON = (libraryItems: LibraryItems) => {
+  const files = libraryItems.reduce<BinaryFiles>((acc, item) => {
+    return item.files ? { ...acc, ...item.files } : acc;
+  }, {});
   const data: ExportedLibraryData = {
     type: EXPORT_DATA_TYPES.excalidrawLibrary,
     version: VERSIONS.excalidrawLibrary,
     source: getExportSource(),
     libraryItems,
+    ...(Object.keys(files).length ? { files } : {}),
   };
   return JSON.stringify(data, null, 2);
 };

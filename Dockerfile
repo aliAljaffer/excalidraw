@@ -11,6 +11,11 @@ RUN --mount=type=cache,target=/root/.cache/yarn \
 
 ARG NODE_ENV=production
 
+# Vendor icon sets for the library panel; written to public/libraries, which
+# vite copies into the build. A source that cannot be fetched drops that one
+# library with a warning instead of failing the build.
+RUN node scripts/build-icon-libraries.mjs
+
 RUN npm_config_target_arch=${TARGETARCH} yarn build:app:docker
 
 FROM nginx:stable-alpine-slim@sha256:2c605dbeab79a6b2a63340474fe58119d0ef95bdc4b1f41df0aa689659b3d13b

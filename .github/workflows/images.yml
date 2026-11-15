@@ -9,6 +9,7 @@ on:
       - ".env.production"
       - "backend/**"
       - "room/**"
+      - "scripts/build-icon-libraries.mjs"
       - "Dockerfile"
       - "nginx.conf.template"
       - "yarn.lock"

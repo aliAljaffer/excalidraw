@@ -10,12 +10,15 @@ export type SvgCache = Map<LibraryItem["id"], SVGSVGElement>;
 
 export const libraryItemSvgsCache = atom<SvgCache>(new Map());
 
-const exportLibraryItemToSvg = async (elements: LibraryItem["elements"]) => {
+const exportLibraryItemToSvg = async (
+  elements: LibraryItem["elements"],
+  files?: LibraryItem["files"],
+) => {
   return await exportScene({
     type: "svg",
     data: {
       elements,
-      files: null,
+      files: files || null,
     },
     config: {
       skipInliningFonts: true,
@@ -27,6 +30,7 @@ const exportLibraryItemToSvg = async (elements: LibraryItem["elements"]) => {
 export const useLibraryItemSvg = (
   id: LibraryItem["id"] | null,
   elements: LibraryItem["elements"] | undefined,
+  files: LibraryItem["files"],
   svgCache: SvgCache,
   ref: React.RefObject<HTMLDivElement | null>,
 ): SVGSVGElement | undefined => {
@@ -43,7 +47,7 @@ export const useLibraryItemSvg = (
         } else {
           // When there is no svg in cache export it and save to cache
           (async () => {
-            const exportedSvg = await exportLibraryItemToSvg(elements);
+            const exportedSvg = await exportLibraryItemToSvg(elements, files);
             // TODO: should likely be removed for custom fonts
             exportedSvg.querySelector(".style-fonts")?.remove();
 
@@ -61,7 +65,7 @@ export const useLibraryItemSvg = (
         })();
       }
     }
-  }, [id, elements, svgCache, setSvg]);
+  }, [id, elements, files, svgCache, setSvg]);
 
   useEffect(() => {
     const node = ref.current;
