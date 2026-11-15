@@ -46,12 +46,18 @@ func groupBoards(folders []folder, boards []board) ([]folder, []board) {
 // requireOwner refuses anything that did not come through oauth2-proxy. The
 // public gateway only reaches this handler for /boards, and the proxy is the
 // only caller that sets the header.
+//
+// In reverse-proxy mode the proxy forwards X-Forwarded-Email (because
+// --pass-user-headers defaults to true). X-Auth-Request-Email only appears in
+// nginx auth_request mode, and is accepted for that case.
 func (s *server) requireOwner(w http.ResponseWriter, r *http.Request) bool {
-	if strings.TrimSpace(r.Header.Get("X-Auth-Request-Email")) == "" {
-		http.Error(w, "login required", http.StatusUnauthorized)
-		return false
+	for _, header := range []string{"X-Forwarded-Email", "X-Auth-Request-Email"} {
+		if strings.TrimSpace(r.Header.Get(header)) != "" {
+			return true
+		}
 	}
-	return true
+	http.Error(w, "login required", http.StatusUnauthorized)
+	return false
 }
 
 func (s *server) gallery(w http.ResponseWriter, r *http.Request) {

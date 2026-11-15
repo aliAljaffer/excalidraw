@@ -210,7 +210,7 @@ func TestUnknownRoomIs404(t *testing.T) {
 func TestBoardLifecycle(t *testing.T) {
 	s := testServer(t)
 	auth := func(r *http.Request) *http.Request {
-		r.Header.Set("X-Auth-Request-Email", "me@example.com")
+		r.Header.Set("X-Forwarded-Email", "me@example.com")
 		return r
 	}
 
@@ -234,6 +234,11 @@ func TestBoardLifecycle(t *testing.T) {
 	withoutAuth := do(t, s, httptest.NewRequest("GET", "/boards", nil))
 	if withoutAuth.Code != http.StatusUnauthorized {
 		t.Fatalf("gallery without the proxy header must be 401, got %d", withoutAuth.Code)
+	}
+	forwardAuth := httptest.NewRequest("GET", "/boards", nil)
+	forwardAuth.Header.Set("X-Auth-Request-Email", "me@example.com")
+	if rec := do(t, s, forwardAuth); rec.Code != http.StatusOK {
+		t.Fatalf("the forward-auth header must also be accepted, got %d", rec.Code)
 	}
 
 	var boardID, roomID string
@@ -302,7 +307,7 @@ func TestRetentionSparesBoardRooms(t *testing.T) {
 func TestGalleryRendersHTML(t *testing.T) {
 	s := testServer(t)
 	req := httptest.NewRequest("GET", "/boards", nil)
-	req.Header.Set("X-Auth-Request-Email", "me@example.com")
+	req.Header.Set("X-Forwarded-Email", "me@example.com")
 	rec := do(t, s, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d", rec.Code)
