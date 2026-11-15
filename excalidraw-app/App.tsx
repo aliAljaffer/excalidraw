@@ -60,8 +60,6 @@ import {
   useHandleLibrary,
 } from "@excalidraw/excalidraw/data/library";
 
-import { useIconLibraries } from "./useIconLibraries";
-
 import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconcile";
 import type { RestoredDataState } from "@excalidraw/excalidraw/data/restore";
 import type {
@@ -79,6 +77,7 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ResolutionType } from "@excalidraw/common/utility-types";
 import type { ResolvablePromise } from "@excalidraw/common/utils";
+
 
 import CustomStats from "./CustomStats";
 import {
@@ -488,7 +487,6 @@ const ExcalidrawWrapper = () => {
     migrationAdapter: LibraryLocalStorageMigrationAdapter,
   });
 
-  useIconLibraries(excalidrawAPI);
 
   const [, forceRefresh] = useState(false);
 
