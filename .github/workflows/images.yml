@@ -56,8 +56,6 @@ jobs:
           tags: |
             ${{ env.APP_IMAGE }}:${{ github.sha }}
             ${{ env.APP_IMAGE }}:latest
-          cache-from: type=gha,scope=excalidraw
-          cache-to: type=gha,mode=max,scope=excalidraw
 
       - name: Build scenes image
         id: scenes
@@ -72,8 +70,6 @@ jobs:
           tags: |
             ${{ env.SCENES_IMAGE }}:${{ github.sha }}
             ${{ env.SCENES_IMAGE }}:latest
-          cache-from: type=gha,scope=scenes
-          cache-to: type=gha,mode=max,scope=scenes
 
       - name: Smoke test app
         env:
