@@ -47,6 +47,11 @@ export const STORAGE_KEYS = {
   __LEGACY_LOCAL_STORAGE_LIBRARY: "excalidraw-library",
 } as const;
 
+// True when the app was loaded at the private root, which is the only place
+// that should offer the board gallery. Captured at import time because the URL
+// is rewritten to the share base right after boot.
+export const IS_PRIVATE_ENTRY = window.location.pathname === "/";
+
 // Public path of the app. Every link handed to someone else must resolve here,
 // because the private root sits behind a login.
 export const SHARE_BASE = import.meta.env.VITE_APP_SHARE_BASE || "/s/";

@@ -1,6 +1,9 @@
+import { gridIcon } from "@excalidraw/excalidraw/components/icons";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { WelcomeScreen } from "@excalidraw/excalidraw/index";
 import React from "react";
+
+import { IS_PRIVATE_ENTRY } from "../app_constants";
 
 export const AppWelcomeScreen: React.FC<{
   onCollabDialogOpen: () => any;
@@ -25,6 +28,15 @@ export const AppWelcomeScreen: React.FC<{
           {t("welcomeScreen.app.center_heading_line3")}
         </WelcomeScreen.Center.Heading>
         <WelcomeScreen.Center.Menu>
+          {IS_PRIVATE_ENTRY && (
+            <WelcomeScreen.Center.MenuItemLink
+              href="/boards"
+              shortcut={null}
+              icon={gridIcon}
+            >
+              {t("labels.boards")}
+            </WelcomeScreen.Center.MenuItemLink>
+          )}
           <WelcomeScreen.Center.MenuItemLoadScene />
           <WelcomeScreen.Center.MenuItemHelp />
           {props.isCollabEnabled && (

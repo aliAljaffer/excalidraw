@@ -1,4 +1,5 @@
-import { eyeIcon } from "@excalidraw/excalidraw/components/icons";
+import { eyeIcon, gridIcon } from "@excalidraw/excalidraw/components/icons";
+import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { MainMenu } from "@excalidraw/excalidraw/index";
 import React from "react";
 
@@ -6,6 +7,7 @@ import { isDevEnv } from "@excalidraw/common";
 
 import type { Theme } from "@excalidraw/element/types";
 
+import { IS_PRIVATE_ENTRY } from "../app_constants";
 import { LanguageList } from "../app-language/LanguageList";
 
 import { saveDebugState } from "./DebugCanvas";
@@ -17,8 +19,18 @@ export const AppMainMenu: React.FC<{
   theme: Theme | "system";
   refresh: () => void;
 }> = React.memo((props) => {
+  const { t } = useI18n();
   return (
     <MainMenu>
+      {IS_PRIVATE_ENTRY && (
+        <MainMenu.ItemLink
+          icon={gridIcon}
+          href="/boards"
+          className="highlighted"
+        >
+          {t("labels.boards")}
+        </MainMenu.ItemLink>
+      )}
       <MainMenu.DefaultItems.LoadScene />
       <MainMenu.DefaultItems.SaveToActiveFile />
       <MainMenu.DefaultItems.Export />

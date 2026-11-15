@@ -207,7 +207,8 @@
     "showHints": "Toolbar hints",
     "inputDevice": "Input",
     "inputDeviceTrackpad": "Trackpad",
-    "inputDeviceMouse": "Mouse"
+    "inputDeviceMouse": "Mouse",
+    "boards": "Boards"
   },
   "elementLink": {
     "title": "Link to object",

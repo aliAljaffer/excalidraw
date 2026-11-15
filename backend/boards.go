@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,9 +59,21 @@ func (s *server) requireOwner(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 	}
+	// Name the headers that did arrive, once, so a proxy that forwards a
+	// different header than expected is one log line away from being obvious.
+	missingHeaderOnce.Do(func() {
+		names := make([]string, 0, len(r.Header))
+		for name := range r.Header {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		log.Printf("gallery request without an identity header, saw: %s", strings.Join(names, ", "))
+	})
 	http.Error(w, "login required", http.StatusUnauthorized)
 	return false
 }
+
+var missingHeaderOnce sync.Once
 
 func (s *server) gallery(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOwner(w, r) {

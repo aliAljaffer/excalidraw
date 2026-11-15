@@ -10,7 +10,7 @@ on:
       - "backend/**"
       - "room/**"
       - "Dockerfile"
-      - "nginx.conf"
+      - "nginx.conf.template"
       - "yarn.lock"
       - "package.json"
       - ".github/workflows/images.yml"

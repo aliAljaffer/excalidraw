@@ -5,7 +5,7 @@
 !.npmrc
 !.prettierrc
 !excalidraw-app/
-!nginx.conf
+!nginx.conf.template
 !package.json
 !public/
 !packages/
