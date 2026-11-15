@@ -19,12 +19,16 @@
   }
 
   .board-gallery__chip {
+    display: inline-flex;
+    align-items: center;
+    height: 2.1rem;
+    padding: 0 0.75rem;
     border: 1px solid var(--default-border-color);
     background: var(--island-bg-color);
     color: var(--text-primary-color);
     border-radius: var(--border-radius-lg);
-    padding: 0.3rem 0.7rem;
     font-size: 0.875rem;
+    line-height: 1;
     cursor: pointer;
 
     &.is-active {
@@ -34,7 +38,13 @@
 
     &--ghost {
       border-style: dashed;
-      opacity: 0.8;
+      color: var(--text-primary-color);
+      opacity: 0.85;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 1px;
     }
   }
 
@@ -47,8 +57,12 @@
     padding: 0 0.25rem;
   }
 
+  .board-gallery__new-folder {
+    display: inline-flex;
+  }
+
   .board-gallery__new-folder .board-card__input {
-    width: 9rem;
+    flex: 0 0 9rem;
   }
 
   .board-gallery__grid {
@@ -75,11 +89,15 @@
 
     &--new {
       border-style: dashed;
-      gap: 0.6rem;
-      justify-content: center;
+      justify-content: flex-start;
 
       .board-card__row {
-        flex-wrap: nowrap;
+        width: 100%;
+        gap: 0.5rem;
+      }
+
+      .board-card__input {
+        width: 100%;
       }
 
       button {
@@ -117,10 +135,13 @@
     align-items: center;
     gap: 0.4rem;
     flex-wrap: wrap;
+    margin-top: auto;
   }
 
   .board-card__row--actions {
-    min-height: 1.6rem;
+    align-items: center;
+    gap: 0.6rem;
+    min-height: 1.7rem;
   }
 
   .board-card__action {
@@ -128,42 +149,49 @@
     background: transparent;
     color: var(--text-primary-color);
     font-size: 0.8rem;
+    line-height: 1;
     padding: 0;
     cursor: pointer;
-    opacity: 0;
+    opacity: 0.7;
     transition: opacity 120ms ease;
 
     &:hover,
     &:focus-visible {
-      text-decoration: underline;
+      opacity: 1;
+      color: var(--color-primary);
     }
 
     &--danger {
       color: var(--color-danger);
+
+      &:hover,
+      &:focus-visible {
+        color: var(--color-danger);
+      }
     }
   }
 
-  .board-card:hover .board-card__action,
-  .board-card:focus-within .board-card__action {
-    opacity: 0.75;
-  }
-
   .board-card__select {
-    opacity: 0;
     font-size: 0.8rem;
+    line-height: 1;
+    padding: 0.2rem 0.3rem;
     border: 1px solid var(--default-border-color);
     border-radius: var(--border-radius-md);
-    background: var(--island-bg-color);
+    background: transparent;
     color: var(--text-primary-color);
     max-width: 8rem;
-  }
+    opacity: 0.7;
+    cursor: pointer;
 
-  .board-card:hover .board-card__select,
-  .board-card:focus-within .board-card__select {
-    opacity: 1;
+    &:hover,
+    &:focus-visible {
+      opacity: 1;
+    }
   }
 
   .board-card__input {
+    flex: 1 1 0;
+    min-width: 0;
     font: inherit;
     font-size: 0.9rem;
     padding: 0.35rem 0.5rem;
@@ -171,7 +199,11 @@
     border: 1px solid var(--default-border-color);
     background: var(--color-surface-lowest);
     color: var(--text-primary-color);
-    width: 100%;
+
+    &:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: -1px;
+    }
   }
 
   .board-gallery__hint {
@@ -211,13 +243,6 @@
   &:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 1px;
-  }
-}
-
-@media (hover: none) {
-  .board-gallery .board-card__action,
-  .board-gallery .board-card__select {
-    opacity: 0.75;
   }
 }
 

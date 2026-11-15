@@ -319,20 +319,21 @@ export const BoardGallery = ({ onClose }: { onClose: () => void }) => {
 
             <div className="board-gallery__grid">
               <div className="board-card board-card--new">
+                <span className="board-card__name">New board</span>
+                <input
+                  className="board-card__input board-card__input--new"
+                  placeholder="Name (optional)"
+                  value={newBoardName}
+                  onChange={(event) => setNewBoardName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      void create();
+                    }
+                  }}
+                />
                 <div className="board-card__row">
-                  <input
-                    className="board-card__input board-card__input--new"
-                    placeholder="Name the board"
-                    value={newBoardName}
-                    onChange={(event) => setNewBoardName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        void create();
-                      }
-                    }}
-                  />
                   <Button onSelect={create} type="button">
-                    New board
+                    Create
                   </Button>
                 </div>
               </div>

@@ -151,7 +151,7 @@ func (s *server) createBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		name = "Board " + time.Now().Format("2 Jan 2006 15:04")
+		name = "Untitled board"
 	}
 
 	boardID := newSlug(8)
