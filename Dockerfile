@@ -15,6 +15,10 @@ RUN npm_config_target_arch=${TARGETARCH} yarn build:app:docker
 
 FROM nginx:stable-alpine-slim@sha256:2c605dbeab79a6b2a63340474fe58119d0ef95bdc4b1f41df0aa689659b3d13b
 
+# Lets the entrypoint export NGINX_LOCAL_RESOLVERS, which the template uses for
+# per-request resolution of the boards upstream.
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+
 COPY --from=build /opt/node_app/excalidraw-app/build /usr/share/nginx/html
 # Rendered by the image entrypoint, which substitutes the resolver IPs from
 # /etc/resolv.conf and leaves nginx variables alone.
