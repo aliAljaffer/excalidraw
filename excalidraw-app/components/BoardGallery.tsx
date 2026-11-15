@@ -1,185 +1,50 @@
-import { gridIcon } from "@excalidraw/excalidraw/components/icons";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
 import { Dialog } from "@excalidraw/excalidraw/components/Dialog";
 import { FilledButton } from "@excalidraw/excalidraw/components/FilledButton";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-
 import {
-  boardPreviewURL,
+  gridIcon,
+  PlusIcon,
+  searchIcon,
+} from "@excalidraw/excalidraw/components/icons";
+
+import { filterAndSortBoards } from "../data/boardList";
+import {
   createBoard,
   createFolder,
   deleteBoard,
   deleteFolder,
   fetchGallery,
+  getBoardIdFromPath,
   renameFolder,
   updateBoard,
 } from "../data/boards";
 
+import { BoardCard } from "./boards/BoardCard";
+import { FolderRow } from "./boards/FolderRow";
+
 import "./BoardGallery.scss";
 
-import type { BoardGalleryData, BoardSummary } from "../data/boards";
+import type { BoardSort } from "../data/boardList";
+import type {
+  BoardGalleryData,
+  BoardSummary,
+  FolderSummary,
+} from "../data/boards";
 
 const UNFILED = "";
+const NO_BOARDS: BoardSummary[] = [];
+const NO_FOLDERS: FolderSummary[] = [];
 
-const relativeTime = (iso: string) => {
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) {
-    return "";
-  }
-  const minutes = Math.round((Date.now() - then) / 60000);
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes} min ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) {
-    return `${hours} h ago`;
-  }
-  const days = Math.round(hours / 24);
-  if (days === 1) {
-    return "yesterday";
-  }
-  if (days < 30) {
-    return `${days} days ago`;
-  }
-  return new Date(iso).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-};
-
-const BoardCard = ({
-  board,
-  folders,
-  onOpen,
-  onChanged,
-}: {
-  board: BoardSummary;
-  folders: { id: string; name: string }[];
-  onOpen: () => void;
-  onChanged: () => void;
-}) => {
-  const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(board.name);
-  const [busy, setBusy] = useState(false);
-
-  const commitName = async () => {
-    if (busy) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await updateBoard(board.id, { name: name.trim() || board.name });
-      setRenaming(false);
-      onChanged();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="board-card">
-      <button type="button" className="board-card__open" onClick={onOpen}>
-        {board.hasPreview ? (
-          <img
-            className="board-card__preview"
-            src={boardPreviewURL(board)}
-            alt=""
-            loading="lazy"
-          />
-        ) : (
-          <div className="board-card__preview board-card__preview--empty" />
-        )}
-        <span className="board-card__name">{name}</span>
-        <span className="board-card__meta">
-          {relativeTime(board.updatedAt)}
-        </span>
-      </button>
-
-      {renaming ? (
-        <div className="board-card__row">
-          <input
-            className="board-card__input"
-            value={name}
-            autoFocus
-            maxLength={120}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void commitName();
-              }
-              if (event.key === "Escape") {
-                setName(board.name);
-                setRenaming(false);
-              }
-            }}
-          />
-          <FilledButton size="medium" onClick={commitName}>
-            Save
-          </FilledButton>
-          <FilledButton
-            size="medium"
-            variant="outlined"
-            color="muted"
-            onClick={() => {
-              setName(board.name);
-              setRenaming(false);
-            }}
-          >
-            Cancel
-          </FilledButton>
-        </div>
-      ) : (
-        <div className="board-card__row board-card__row--actions">
-          <button
-            type="button"
-            className="board-card__action"
-            onClick={() => {
-              setName(board.name);
-              setRenaming(true);
-            }}
-          >
-            Rename
-          </button>
-          <select
-            className="board-card__action board-card__select"
-            value={board.folderId}
-            aria-label="Folder"
-            onChange={async (event) => {
-              await updateBoard(board.id, { folderId: event.target.value });
-              onChanged();
-            }}
-          >
-            <option value={UNFILED}>No folder</option>
-            {folders.map((folder) => (
-              <option key={folder.id} value={folder.id}>
-                {folder.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="board-card__action board-card__action--danger"
-            onClick={async () => {
-              if (
-                window.confirm(
-                  `Delete "${board.name}" and its drawing? This cannot be undone.`,
-                )
-              ) {
-                await deleteBoard(board.id);
-                onChanged();
-              }
-            }}
-          >
-            Delete
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
+type Confirm =
+  | { kind: "board"; board: BoardSummary }
+  | { kind: "folder"; folder: FolderSummary };
 
 export const BoardGallery = ({
   onClose,
@@ -190,17 +55,36 @@ export const BoardGallery = ({
 }) => {
   const [data, setData] = useState<BoardGalleryData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<string | null>(null);
-  const [newBoardName, setNewBoardName] = useState("");
-  const [newFolderName, setNewFolderName] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<BoardSort>("recent");
+  const [folderFilter, setFolderFilter] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [openFolderMenuId, setOpenFolderMenuId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [addingFolder, setAddingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+
+  const searchRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const currentBoardId = getBoardIdFromPath();
+
+  const bodyRef = useCallback((node: HTMLDivElement | null) => {
+    setPortalRoot(node?.closest<HTMLElement>(".Modal") ?? null);
+  }, []);
 
   const reload = useCallback(async () => {
     try {
       setData(await fetchGallery());
       setError(null);
     } catch (e: any) {
-      setError(e.message || "could not load the gallery");
+      setError(e?.message || "could not load the gallery");
     }
   }, []);
 
@@ -208,172 +92,425 @@ export const BoardGallery = ({
     void reload();
   }, [reload]);
 
-  const openBoard = (id: string) => onOpenBoard(id);
-
-  const visibleBoards = useMemo(() => {
-    if (!data || filter === null) {
-      return data?.boards ?? [];
+  useEffect(() => {
+    if (window.matchMedia("(pointer: fine)").matches) {
+      searchRef.current?.focus();
     }
-    return data.boards.filter((board) => board.folderId === filter);
-  }, [data, filter]);
+  }, []);
+
+  useEffect(() => {
+    if (confirm) {
+      const timer = window.setTimeout(() => cancelRef.current?.focus());
+      return () => window.clearTimeout(timer);
+    }
+  }, [confirm]);
+
+  const fail = (e: any, fallback: string) =>
+    setActionError(e?.message || fallback);
+
+  const focusSearch = () => window.setTimeout(() => searchRef.current?.focus());
+
+  const boards = data?.boards ?? NO_BOARDS;
+  const folders = data?.folders ?? NO_FOLDERS;
+
+  const counts = useMemo(() => {
+    const total = new Map<string, number>();
+    for (const board of boards) {
+      total.set(board.folderId, (total.get(board.folderId) ?? 0) + 1);
+    }
+    return total;
+  }, [boards]);
+
+  const visible = useMemo(
+    () => filterAndSortBoards(boards, folderFilter, query, sort),
+    [boards, folderFilter, query, sort],
+  );
+
+  const openBoard = (id: string) => {
+    if (id === currentBoardId) {
+      onClose();
+      return;
+    }
+    onOpenBoard(id);
+  };
 
   const create = async () => {
-    const board = await createBoard({
-      name: newBoardName.trim() || undefined,
-      folderId: filter ?? undefined,
-    });
-    setNewBoardName("");
-    openBoard(board.id);
+    if (creating) {
+      return;
+    }
+    setCreating(true);
+    try {
+      const board = await createBoard({ folderId: folderFilter ?? undefined });
+      onOpenBoard(board.id);
+    } catch (e: any) {
+      fail(e, "Could not create the board.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const renameBoard = async (board: BoardSummary, name: string) => {
+    setRenamingId(null);
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === board.name) {
+      focusSearch();
+      return;
+    }
+    try {
+      await updateBoard(board.id, { name: trimmed });
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not rename the board.");
+    } finally {
+      focusSearch();
+    }
+  };
+
+  const moveBoard = async (board: BoardSummary, folderId: string) => {
+    if (folderId === board.folderId) {
+      return;
+    }
+    try {
+      await updateBoard(board.id, { folderId });
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not move the board.");
+    } finally {
+      focusSearch();
+    }
+  };
+
+  const addFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name || creatingFolder) {
+      return;
+    }
+    setCreatingFolder(true);
+    try {
+      await createFolder(name);
+      setNewFolderName("");
+      setAddingFolder(false);
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not create the folder.");
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
+
+  const renameFolderTo = async (folder: FolderSummary, name: string) => {
+    setRenamingFolderId(null);
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === folder.name) {
+      focusSearch();
+      return;
+    }
+    try {
+      await renameFolder(folder.id, trimmed);
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not rename the folder.");
+    } finally {
+      focusSearch();
+    }
+  };
+
+  const closeConfirm = () => {
+    setConfirm(null);
+    focusSearch();
+  };
+
+  const confirmDelete = async () => {
+    if (!confirm || confirmBusy) {
+      return;
+    }
+    setConfirmBusy(true);
+    try {
+      if (confirm.kind === "board") {
+        await deleteBoard(confirm.board.id);
+      } else {
+        await deleteFolder(confirm.folder.id);
+        if (folderFilter === confirm.folder.id) {
+          setFolderFilter(null);
+        }
+      }
+      setConfirm(null);
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not delete it.");
+      setConfirm(null);
+    } finally {
+      setConfirmBusy(false);
+      focusSearch();
+    }
+  };
+
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (query) {
+      event.preventDefault();
+      event.stopPropagation();
+      setQuery("");
+    }
+  };
+
+  const emptyState = () => {
+    if (query) {
+      return (
+        <>
+          <p className="board-gallery__state-text">
+            No boards match “{query}”.
+          </p>
+          <FilledButton
+            variant="outlined"
+            color="muted"
+            onClick={() => setQuery("")}
+          >
+            Clear search
+          </FilledButton>
+        </>
+      );
+    }
+    if (folderFilter !== null) {
+      return (
+        <p className="board-gallery__state-text">
+          This folder is empty. Move a board here from its menu.
+        </p>
+      );
+    }
+    return (
+      <p className="board-gallery__state-text">
+        No boards yet. Start with New board.
+      </p>
+    );
   };
 
   return (
     <Dialog
       onCloseRequest={onClose}
-      title={"Boards"}
-      size={"wide"}
+      title="Boards"
+      size="wide"
       className="board-gallery"
+      autofocus={false}
     >
-      <div className="board-gallery__body">
-        {error ? (
-          <div className="board-gallery__empty">
-            <p>Your boards live behind your login.</p>
-            <p className="board-gallery__hint">{error}</p>
-          </div>
-        ) : (
-          <>
-            <div className="board-gallery__filters">
-              <button
-                type="button"
-                className={`board-gallery__chip${
-                  filter === null ? " is-active" : ""
-                }`}
-                onClick={() => setFilter(null)}
-              >
-                All
-              </button>
-              {data?.folders.map((folder) => (
-                <span key={folder.id} className="board-gallery__chip-group">
-                  <button
-                    type="button"
-                    className={`board-gallery__chip${
-                      filter === folder.id ? " is-active" : ""
-                    }`}
-                    onClick={() => setFilter(folder.id)}
-                    onDoubleClick={async () => {
-                      const name = window.prompt("Folder name", folder.name);
-                      if (name?.trim()) {
-                        await renameFolder(folder.id, name.trim());
-                        await reload();
-                      }
-                    }}
-                    title="Double click to rename"
-                  >
-                    {folder.name}
-                  </button>
-                  <button
-                    type="button"
-                    className="board-gallery__chip-delete"
-                    aria-label={`Delete folder ${folder.name}`}
-                    onClick={async () => {
-                      if (
-                        window.confirm(
-                          `Delete the folder "${folder.name}"? Its boards stay, unfiled.`,
-                        )
-                      ) {
-                        await deleteFolder(folder.id);
-                        if (filter === folder.id) {
-                          setFilter(null);
-                        }
-                        await reload();
-                      }
-                    }}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <button
-                type="button"
-                className={`board-gallery__chip${
-                  filter === UNFILED && data ? " is-active" : ""
-                }`}
-                onClick={() => setFilter(UNFILED)}
-              >
-                Unfiled
-              </button>
+      <div className="board-gallery__body" ref={bodyRef}>
+        <div className="board-gallery__header">
+          <label className="board-gallery__search">
+            {searchIcon}
+            <input
+              ref={searchRef}
+              type="text"
+              placeholder="Search boards"
+              aria-label="Search boards"
+              value={query}
+              disabled={!data}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={onSearchKeyDown}
+            />
+          </label>
+          <select
+            className="board-gallery__sort"
+            aria-label="Sort boards"
+            value={sort}
+            disabled={!data}
+            onChange={(event) => setSort(event.target.value as BoardSort)}
+          >
+            <option value="recent">Recent</option>
+            <option value="name">Name</option>
+          </select>
+          <FilledButton
+            className="board-gallery__new"
+            icon={PlusIcon}
+            status={creating ? "loading" : null}
+            onClick={create}
+          >
+            New board
+          </FilledButton>
+        </div>
 
-              {addingFolder ? (
-                <span className="board-gallery__new-folder">
-                  <input
-                    className="board-card__input"
-                    placeholder="Folder name"
-                    autoFocus
-                    value={newFolderName}
-                    onChange={(event) => setNewFolderName(event.target.value)}
-                    onKeyDown={async (event) => {
-                      if (event.key === "Enter" && newFolderName.trim()) {
-                        await createFolder(newFolderName.trim());
-                        setNewFolderName("");
-                        setAddingFolder(false);
-                        await reload();
-                      }
-                      if (event.key === "Escape") {
-                        setAddingFolder(false);
-                      }
-                    }}
-                  />
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="board-gallery__chip board-gallery__chip--ghost"
-                  onClick={() => setAddingFolder(true)}
-                >
-                  New folder
-                </button>
-              )}
-            </div>
-
-            <div className="board-gallery__grid">
-              <div className="board-card board-card--new">
-                <span className="board-card__name">New board</span>
-                <input
-                  className="board-card__input board-card__input--new"
-                  placeholder="Name (optional)"
-                  value={newBoardName}
-                  onChange={(event) => setNewBoardName(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      void create();
-                    }
-                  }}
-                />
-                <div className="board-card__row">
-                  <FilledButton size="medium" onClick={create}>
-                    Create
-                  </FilledButton>
-                </div>
-              </div>
-
-              {visibleBoards.map((board) => (
-                <BoardCard
-                  key={board.id}
-                  board={board}
-                  folders={data?.folders ?? []}
-                  onOpen={() => openBoard(board.id)}
-                  onChanged={reload}
-                />
-              ))}
-            </div>
-
-            {data && visibleBoards.length === 0 && (
-              <p className="board-gallery__hint">
-                No boards here yet. Name one above and it opens in the editor.
-              </p>
-            )}
-          </>
+        {actionError && (
+          <p className="board-gallery__alert" role="alert">
+            {actionError}
+          </p>
         )}
+
+        <div className="board-gallery__panes">
+          <nav className="board-gallery__rail" aria-label="Folders">
+            <button
+              type="button"
+              className={`board-gallery__rail-item${
+                folderFilter === null ? " is-active" : ""
+              }`}
+              aria-current={folderFilter === null ? "true" : undefined}
+              onClick={() => setFolderFilter(null)}
+            >
+              <span className="board-gallery__rail-name">All</span>
+              <span className="board-gallery__rail-count">{boards.length}</span>
+            </button>
+            <button
+              type="button"
+              className={`board-gallery__rail-item${
+                folderFilter === UNFILED ? " is-active" : ""
+              }`}
+              aria-current={folderFilter === UNFILED ? "true" : undefined}
+              onClick={() => setFolderFilter(UNFILED)}
+            >
+              <span className="board-gallery__rail-name">Unfiled</span>
+              <span className="board-gallery__rail-count">
+                {counts.get(UNFILED) ?? 0}
+              </span>
+            </button>
+
+            {folders.length > 0 && (
+              <div className="board-gallery__rail-divider" />
+            )}
+
+            {folders.map((folder) => (
+              <FolderRow
+                key={folder.id}
+                folder={folder}
+                count={counts.get(folder.id) ?? 0}
+                active={folderFilter === folder.id}
+                menuOpen={openFolderMenuId === folder.id}
+                renaming={renamingFolderId === folder.id}
+                portalRoot={portalRoot}
+                onSelect={() => setFolderFilter(folder.id)}
+                onMenuOpenChange={(open) =>
+                  setOpenFolderMenuId(open ? folder.id : null)
+                }
+                onStartRename={() => setRenamingFolderId(folder.id)}
+                onCommitRename={(name) => renameFolderTo(folder, name)}
+                onCancelRename={() => setRenamingFolderId(null)}
+                onDelete={() => setConfirm({ kind: "folder", folder })}
+              />
+            ))}
+
+            <div className="board-gallery__rail-divider" />
+
+            {addingFolder ? (
+              <input
+                className="board-gallery__rail-input"
+                placeholder="Folder name"
+                aria-label="Folder name"
+                autoFocus
+                value={newFolderName}
+                disabled={creatingFolder}
+                onChange={(event) => setNewFolderName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void addFolder();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setNewFolderName("");
+                    setAddingFolder(false);
+                  }
+                }}
+                onBlur={() => {
+                  setNewFolderName("");
+                  setAddingFolder(false);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="board-gallery__rail-new"
+                disabled={!data}
+                onClick={() => setAddingFolder(true)}
+              >
+                {PlusIcon}
+                New folder
+              </button>
+            )}
+          </nav>
+
+          <div className="board-gallery__main">
+            {error ? (
+              <div className="board-gallery__state">
+                <p className="board-gallery__state-text">{error}</p>
+                <FilledButton
+                  variant="outlined"
+                  color="muted"
+                  onClick={() => void reload()}
+                >
+                  Try again
+                </FilledButton>
+              </div>
+            ) : !data ? (
+              <div className="board-gallery__state" role="status">
+                <p className="board-gallery__state-text">Loading boards…</p>
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="board-gallery__state">{emptyState()}</div>
+            ) : (
+              <div className="board-gallery__grid">
+                {visible.map((board) => (
+                  <BoardCard
+                    key={board.id}
+                    board={board}
+                    folders={folders}
+                    isCurrent={board.id === currentBoardId}
+                    menuOpen={openMenuId === board.id}
+                    renaming={renamingId === board.id}
+                    portalRoot={portalRoot}
+                    onOpen={() => openBoard(board.id)}
+                    onMenuOpenChange={(open) =>
+                      setOpenMenuId(open ? board.id : null)
+                    }
+                    onStartRename={() => setRenamingId(board.id)}
+                    onCommitRename={(name) => renameBoard(board, name)}
+                    onCancelRename={() => setRenamingId(null)}
+                    onMove={(folderId) => moveBoard(board, folderId)}
+                    onDelete={() => setConfirm({ kind: "board", board })}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+
+      {confirm && (
+        <Dialog
+          className="board-confirm"
+          size="small"
+          title={
+            confirm.kind === "board"
+              ? `Delete “${confirm.board.name}”?`
+              : `Delete the folder “${confirm.folder.name}”?`
+          }
+          onCloseRequest={closeConfirm}
+          autofocus={false}
+        >
+          <p className="board-confirm__text">
+            {confirm.kind === "board"
+              ? "The drawing goes with it. This cannot be undone."
+              : "Its boards stay, unfiled."}
+          </p>
+          <div className="board-confirm__actions">
+            <FilledButton
+              ref={cancelRef}
+              variant="outlined"
+              color="muted"
+              onClick={closeConfirm}
+            >
+              Cancel
+            </FilledButton>
+            <FilledButton
+              color="danger"
+              status={confirmBusy ? "loading" : null}
+              onClick={confirmDelete}
+            >
+              Delete
+            </FilledButton>
+          </div>
+        </Dialog>
+      )}
     </Dialog>
   );
 };
