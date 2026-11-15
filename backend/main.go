@@ -394,16 +394,17 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("PUT /api/v2/rooms/{id}/files/{fileId}", s.putRoomFile)
 	mux.HandleFunc("GET /api/v2/rooms/{id}/files/{fileId}", s.getRoomFile)
 
-	mux.HandleFunc("GET /boards", s.gallery)
-	mux.HandleFunc("GET /boards/{id}", s.openBoard)
-	mux.HandleFunc("POST /boards/new", s.createBoard)
-	mux.HandleFunc("POST /boards/{id}/rename", s.renameBoard)
-	mux.HandleFunc("POST /boards/{id}/move", s.moveBoard)
-	mux.HandleFunc("POST /boards/{id}/delete", s.deleteBoard)
-	// Folders live under /boards so the gateway's /boards rule covers them.
-	mux.HandleFunc("POST /boards/folders/new", s.createFolder)
-	mux.HandleFunc("POST /boards/folders/{id}/rename", s.renameFolder)
-	mux.HandleFunc("POST /boards/folders/{id}/delete", s.deleteFolder)
+	mux.HandleFunc("GET /api/boards", s.listBoards)
+	mux.HandleFunc("POST /api/boards", s.createBoard)
+	mux.HandleFunc("PATCH /api/boards/{id}", s.updateBoard)
+	mux.HandleFunc("DELETE /api/boards/{id}", s.deleteBoard)
+	mux.HandleFunc("GET /api/boards/{id}/scene", s.getBoardScene)
+	mux.HandleFunc("PUT /api/boards/{id}/scene", s.putBoardScene)
+	mux.HandleFunc("GET /api/boards/{id}/files/{fileId}", s.getBoardFile)
+	mux.HandleFunc("PUT /api/boards/{id}/files/{fileId}", s.putBoardFile)
+	mux.HandleFunc("POST /api/boards/folders", s.createFolder)
+	mux.HandleFunc("PATCH /api/boards/folders/{id}", s.updateFolder)
+	mux.HandleFunc("DELETE /api/boards/folders/{id}", s.deleteFolder)
 	return mux
 }
 

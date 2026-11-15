@@ -42,17 +42,26 @@ server {
     try_files $uri =404;
   }
 
-  # The gallery is rendered by the scenes service. This path is only reachable
-  # through oauth2-proxy, which is why the service trusts the proxy header.
-  # Resolved per request on purpose: a missing gallery upstream must not stop
-  # nginx from starting, or share links would go down with it. The resolver
-  # comes from the container's /etc/resolv.conf through the image entrypoint.
-  location /boards {
+  # Boards API. Resolved per request on purpose: a missing gallery upstream
+  # must not stop nginx from starting, or share links would go down with it.
+  # The resolver comes from the container's /etc/resolv.conf.
+  location /api/boards {
     resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
     set $gallery excalidraw-scenes.excalidraw.svc.cluster.local:8080;
     proxy_pass http://$gallery;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  # A board opened in the editor. Same SPA, private path.
+  location /b/ {
+    expires -1;
+    try_files /index.html =404;
+  }
+
+  # The old server-rendered gallery lives on as the editor entry point.
+  location = /boards {
+    return 302 /;
   }
 
   # The editor lives at the root and under /s/ only. Anything else is a 404 so

@@ -19,6 +19,7 @@ import { OverwriteConfirmDialog } from "@excalidraw/excalidraw/components/Overwr
 import { openConfirmModal } from "@excalidraw/excalidraw/components/OverwriteConfirm/OverwriteConfirmState";
 import { ShareableLinkDialog } from "@excalidraw/excalidraw/components/ShareableLinkDialog";
 import Trans from "@excalidraw/excalidraw/components/Trans";
+import { FooterLeft } from "@excalidraw/excalidraw";
 import {
   APP_NAME,
   EVENT,
@@ -86,6 +87,7 @@ import {
   appJotaiStore,
 } from "./app-jotai";
 import {
+  IS_PRIVATE_ENTRY,
   shareUrl,
   STORAGE_KEYS,
   SYNC_BROWSER_TABS_TIMEOUT,
@@ -97,6 +99,7 @@ import Collab, {
   userToFollowAtom,
 } from "./collab/Collab";
 import { AppFooter } from "./components/AppFooter";
+import { BoardGallery, BoardGalleryButton } from "./components/BoardGallery";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
@@ -135,6 +138,13 @@ import DebugCanvas, {
 } from "./components/DebugCanvas";
 import { useSimulatedCollaborators } from "./debugCollaborators";
 import { AIComponents } from "./components/AI";
+import {
+  getBoardSession,
+  queueBoardSave,
+  saveBoardNow,
+  startBoardSession,
+} from "./data/boardSession";
+import { getBoardIdFromPath, loadBoard, loadBoardFiles } from "./data/boards";
 
 import "./index.scss";
 
@@ -212,6 +222,41 @@ const initializeScene = async (opts: {
     | { isExternalScene: false; id?: null; key?: null }
   )
 > => {
+  const boardId = getBoardIdFromPath();
+  if (boardId) {
+    const board = await loadBoard(boardId);
+    if (!board) {
+      return { scene: null, isExternalScene: false };
+    }
+    startBoardSession({
+      id: board.id,
+      roomKey: board.roomKey,
+      revision: board.revision,
+    });
+    const fileIds = board.elements
+      .filter((element) => isInitializedImageElement(element))
+      .map((element) => element.fileId);
+    const files: BinaryFiles = {};
+    if (fileIds.length) {
+      const { loadedFiles } = await loadBoardFiles(
+        board.id,
+        board.roomKey,
+        fileIds,
+      );
+      for (const file of loadedFiles) {
+        files[file.id] = file;
+      }
+    }
+    return {
+      scene: {
+        elements: board.elements,
+        files,
+        scrollToContent: true,
+      },
+      isExternalScene: false,
+    };
+  }
+
   const searchParams = new URLSearchParams(window.location.search);
   const id = searchParams.get("id");
   const jsonBackendMatch = window.location.hash.match(
@@ -547,6 +592,30 @@ const ExcalidrawWrapper = () => {
   );
 
   useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+    const flush = () => {
+      if (getBoardSession()?.dirty) {
+        void saveBoardNow(
+          excalidrawAPI.getSceneElementsIncludingDeleted(),
+        ).catch(() => {});
+      }
+    };
+    const onHidden = () => {
+      if (document.hidden) {
+        flush();
+      }
+    };
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, [excalidrawAPI]);
+
+  useEffect(() => {
     if (!excalidrawAPI || (!isCollabDisabled && !collabAPI)) {
       return;
     }
@@ -708,6 +777,8 @@ const ExcalidrawWrapper = () => {
   ) => {
     if (collabAPI?.isCollaborating()) {
       collabAPI.syncElements(elements);
+    } else if (getBoardSession()) {
+      queueBoardSave(elements);
     }
 
     // this check is redundant, but since this is a hot path, it's best
@@ -752,6 +823,8 @@ const ExcalidrawWrapper = () => {
       );
     }
   };
+
+  const [isBoardGalleryOpen, setIsBoardGalleryOpen] = useState(false);
 
   const [latestShareableLink, setLatestShareableLink] = useState<string | null>(
     null,
@@ -957,6 +1030,7 @@ const ExcalidrawWrapper = () => {
       >
         <AppMainMenu
           onCollabDialogOpen={onCollabDialogOpen}
+          onBoardGalleryOpen={() => setIsBoardGalleryOpen(true)}
           isCollaborating={isCollaborating}
           isCollabEnabled={isCollabAvailable}
           theme={appTheme}
@@ -964,6 +1038,7 @@ const ExcalidrawWrapper = () => {
         />
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}
+          onBoardGalleryOpen={() => setIsBoardGalleryOpen(true)}
           isCollabEnabled={isCollabAvailable}
         />
         <OverwriteConfirmDialog>
@@ -971,6 +1046,14 @@ const ExcalidrawWrapper = () => {
           <OverwriteConfirmDialog.Actions.SaveToDisk />
         </OverwriteConfirmDialog>
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
+        {IS_PRIVATE_ENTRY && excalidrawAPI && (
+          <FooterLeft>
+            <BoardGalleryButton onOpen={() => setIsBoardGalleryOpen(true)} />
+          </FooterLeft>
+        )}
+        {isBoardGalleryOpen && (
+          <BoardGallery onClose={() => setIsBoardGalleryOpen(false)} />
+        )}
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />

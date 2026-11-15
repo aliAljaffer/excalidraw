@@ -30,7 +30,8 @@ const Footer = ({
   /** whether the minimap (when toggled on) and its toggle are rendered */
   minimapUIEnabled: boolean;
 }) => {
-  const { FooterCenterTunnel, WelcomeScreenHelpHintTunnel } = useTunnels();
+  const { FooterCenterTunnel, FooterLeftTunnel, WelcomeScreenHelpHintTunnel } =
+    useTunnels();
   const app = useApp();
 
   return (
@@ -71,6 +72,8 @@ const Footer = ({
                   })}
                 />
               )}
+
+              <FooterLeftTunnel.Out />
             </Section>
           </Stack.Col>
         </div>

@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -81,23 +80,6 @@ func TestTokenMatches(t *testing.T) {
 	}
 	if tokenMatches(token, nil) {
 		t.Fatal("a missing token must not match")
-	}
-}
-
-func TestGroupBoards(t *testing.T) {
-	folders := []folder{{ID: "f1", Name: "Work"}}
-	boards := []board{
-		{ID: "b1", Name: "one", FolderID: "f1"},
-		{ID: "b2", Name: "two"},
-		{ID: "b3", Name: "three", FolderID: "gone"},
-	}
-	gotFolders, unfiled := groupBoards(folders, boards)
-
-	if len(gotFolders[0].Boards) != 1 || gotFolders[0].Boards[0].ID != "b1" {
-		t.Fatalf("folder should hold b1, got %+v", gotFolders[0].Boards)
-	}
-	if len(unfiled) != 2 {
-		t.Fatalf("boards in no folder, or in a deleted one, must be unfiled, got %d", len(unfiled))
 	}
 }
 
@@ -207,63 +189,142 @@ func TestUnknownRoomIs404(t *testing.T) {
 	}
 }
 
-func TestBoardLifecycle(t *testing.T) {
+func ownerRequest(method, path string, body string) *http.Request {
+	var req *http.Request
+	if body == "" {
+		req = httptest.NewRequest(method, path, nil)
+	} else {
+		req = httptest.NewRequest(method, path, strings.NewReader(body))
+	}
+	req.Header.Set("X-Forwarded-Email", "me@example.com")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
+}
+
+func TestBoardsRequireTheProxyHeader(t *testing.T) {
 	s := testServer(t)
-	auth := func(r *http.Request) *http.Request {
-		r.Header.Set("X-Forwarded-Email", "me@example.com")
-		return r
+	if rec := do(t, s, httptest.NewRequest("GET", "/api/boards", nil)); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d, want 401", rec.Code)
 	}
-
-	form := url.Values{"name": {"Architecture"}, "folder_id": {""}}
-	req := auth(httptest.NewRequest("POST", "/boards/new", strings.NewReader(form.Encode())))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := do(t, s, req)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("create board: got %d, want 302 (%s)", rec.Code, rec.Body)
-	}
-	open := rec.Header().Get("Location")
-	if !strings.HasPrefix(open, "/s/#room=") {
-		t.Fatalf("new board must open the public room link, got %q", open)
-	}
-
-	rec = do(t, s, auth(httptest.NewRequest("GET", "/boards", nil)))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Architecture") {
-		t.Fatalf("gallery must list the board, got %d", rec.Code)
-	}
-
-	withoutAuth := do(t, s, httptest.NewRequest("GET", "/boards", nil))
-	if withoutAuth.Code != http.StatusUnauthorized {
-		t.Fatalf("gallery without the proxy header must be 401, got %d", withoutAuth.Code)
-	}
-	forwardAuth := httptest.NewRequest("GET", "/boards", nil)
+	forwardAuth := httptest.NewRequest("GET", "/api/boards", nil)
 	forwardAuth.Header.Set("X-Auth-Request-Email", "me@example.com")
 	if rec := do(t, s, forwardAuth); rec.Code != http.StatusOK {
 		t.Fatalf("the forward-auth header must also be accepted, got %d", rec.Code)
 	}
+}
 
-	var boardID, roomID string
+func TestBoardLifecycle(t *testing.T) {
+	s := testServer(t)
+
+	rec := do(t, s, ownerRequest("POST", "/api/boards", `{"name":"Architecture"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d (%s)", rec.Code, rec.Body)
+	}
+	var created boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = do(t, s, ownerRequest("GET", "/api/boards", ""))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Architecture") {
+		t.Fatalf("list must include the board, got %d", rec.Code)
+	}
+
+	rec = do(t, s, ownerRequest("PATCH", "/api/boards/"+created.ID, `{"name":"Renamed"}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Renamed") {
+		t.Fatalf("rename: got %d (%s)", rec.Code, rec.Body)
+	}
+
+	// first scene write, then a stale revision, then the current one
+	scene := func(revision int, cipher string) *httptest.ResponseRecorder {
+		return do(t, s, ownerRequest("PUT", "/api/boards/"+created.ID+"/scene",
+			`{"ciphertext":"`+base64.StdEncoding.EncodeToString([]byte(cipher))+`","iv":"`+
+				base64.StdEncoding.EncodeToString([]byte("iv"))+`","sceneVersion":1,"revision":`+
+				strconv.Itoa(revision)+`}`))
+	}
+	if rec := scene(0, "one"); rec.Code != http.StatusOK {
+		t.Fatalf("first scene write: got %d (%s)", rec.Code, rec.Body)
+	}
+	if rec := scene(0, "stale"); rec.Code != http.StatusConflict {
+		t.Fatalf("stale revision: got %d, want 409", rec.Code)
+	}
+	if rec := scene(1, "two"); rec.Code != http.StatusOK {
+		t.Fatalf("second scene write: got %d (%s)", rec.Code, rec.Body)
+	}
+
+	rec = do(t, s, ownerRequest("GET", "/api/boards/"+created.ID+"/scene", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read scene: got %d", rec.Code)
+	}
+	var stored boardScene
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != 2 || stored.RoomKey == "" {
+		t.Fatalf("scene must report revision 2 and the room key, got %+v", stored)
+	}
+	plain, _ := base64.StdEncoding.DecodeString(stored.Ciphertext)
+	if string(plain) != "two" {
+		t.Fatalf("ciphertext round trip failed: %q", plain)
+	}
+
+	var roomID string
 	if err := s.db.QueryRow(context.Background(),
-		"SELECT id, room_id FROM boards").Scan(&boardID, &roomID); err != nil {
+		"SELECT room_id FROM boards WHERE id = $1", created.ID).Scan(&roomID); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	if _, err := s.db.Exec(ctx,
-		"INSERT INTO rooms (room_id, token_hash, ciphertext, iv, revision) VALUES ($1, $2, $3, $4, 1)",
-		roomID, hashToken("k"), []byte("c"), []byte("i")); err != nil {
-		t.Fatal(err)
-	}
-
-	req = auth(httptest.NewRequest("POST", "/boards/"+boardID+"/delete", nil))
-	req.SetPathValue("id", boardID)
-	if rec := do(t, s, req); rec.Code != http.StatusFound {
+	if rec := do(t, s, ownerRequest("DELETE", "/api/boards/"+created.ID, "")); rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: got %d", rec.Code)
 	}
 	var rooms int
-	if err := s.db.QueryRow(ctx, "SELECT count(*) FROM rooms WHERE room_id = $1", roomID).Scan(&rooms); err != nil {
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT count(*) FROM rooms WHERE room_id = $1", roomID).Scan(&rooms); err != nil {
 		t.Fatal(err)
 	}
 	if rooms != 0 {
 		t.Fatal("deleting a board must drop its room when nothing else points at it")
+	}
+}
+
+func TestFolderLifecycle(t *testing.T) {
+	s := testServer(t)
+	rec := do(t, s, ownerRequest("POST", "/api/boards/folders", `{"name":"Work"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create folder: got %d (%s)", rec.Code, rec.Body)
+	}
+	var folder folderSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &folder); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = do(t, s, ownerRequest("POST", "/api/boards", `{"name":"In folder","folderId":"`+folder.ID+`"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create board in folder: got %d", rec.Code)
+	}
+	var board boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &board); err != nil {
+		t.Fatal(err)
+	}
+	if board.FolderID != folder.ID {
+		t.Fatalf("board should sit in the folder, got %q", board.FolderID)
+	}
+
+	if rec := do(t, s, ownerRequest("PATCH", "/api/boards/"+board.ID, `{"folderId":""}`)); rec.Code != http.StatusOK {
+		t.Fatalf("move out of the folder: got %d", rec.Code)
+	}
+
+	if rec := do(t, s, ownerRequest("DELETE", "/api/boards/folders/"+folder.ID, "")); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete folder: got %d", rec.Code)
+	}
+	var folderID string
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT coalesce(folder_id, '') FROM boards WHERE id = $1", board.ID).Scan(&folderID); err != nil {
+		t.Fatal(err)
+	}
+	if folderID != "" {
+		t.Fatalf("deleting a folder must unfile its boards, got %q", folderID)
 	}
 }
 
@@ -301,23 +362,6 @@ func TestRetentionSparesBoardRooms(t *testing.T) {
 		if n != tc.want {
 			t.Fatalf("room %s after sweep: got %d rows, want %d", tc.room, n, tc.want)
 		}
-	}
-}
-
-func TestGalleryRendersHTML(t *testing.T) {
-	s := testServer(t)
-	req := httptest.NewRequest("GET", "/boards", nil)
-	req.Header.Set("X-Forwarded-Email", "me@example.com")
-	rec := do(t, s, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d", rec.Code)
-	}
-	body, _ := io.ReadAll(rec.Body)
-	if !strings.Contains(string(body), "New board") {
-		t.Fatal("gallery must offer a new board")
-	}
-	if !strings.Contains(string(body), "New folder") {
-		t.Fatal("gallery must offer a new folder")
 	}
 }
 

@@ -7,6 +7,7 @@ import { IS_PRIVATE_ENTRY } from "../app_constants";
 
 export const AppWelcomeScreen: React.FC<{
   onCollabDialogOpen: () => any;
+  onBoardGalleryOpen: () => void;
   isCollabEnabled: boolean;
 }> = React.memo((props) => {
   const { t } = useI18n();
@@ -30,9 +31,13 @@ export const AppWelcomeScreen: React.FC<{
         <WelcomeScreen.Center.Menu>
           {IS_PRIVATE_ENTRY && (
             <WelcomeScreen.Center.MenuItemLink
-              href="/boards"
+              href="/"
               shortcut={null}
               icon={gridIcon}
+              onClick={(event) => {
+                event.preventDefault();
+                props.onBoardGalleryOpen();
+              }}
             >
               {t("labels.boards")}
             </WelcomeScreen.Center.MenuItemLink>

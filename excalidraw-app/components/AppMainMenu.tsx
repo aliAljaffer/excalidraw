@@ -14,6 +14,7 @@ import { saveDebugState } from "./DebugCanvas";
 
 export const AppMainMenu: React.FC<{
   onCollabDialogOpen: () => any;
+  onBoardGalleryOpen: () => void;
   isCollaborating: boolean;
   isCollabEnabled: boolean;
   theme: Theme | "system";
@@ -23,13 +24,13 @@ export const AppMainMenu: React.FC<{
   return (
     <MainMenu>
       {IS_PRIVATE_ENTRY && (
-        <MainMenu.ItemLink
+        <MainMenu.Item
           icon={gridIcon}
-          href="/boards"
+          onSelect={props.onBoardGalleryOpen}
           className="highlighted"
         >
           {t("labels.boards")}
-        </MainMenu.ItemLink>
+        </MainMenu.Item>
       )}
       <MainMenu.DefaultItems.LoadScene />
       <MainMenu.DefaultItems.SaveToActiveFile />
