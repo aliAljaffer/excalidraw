@@ -46,6 +46,10 @@ try {
   FIREBASE_CONFIG = {};
 }
 
+// No Firebase project is configured on this deployment, so persistence is inert
+// until the rooms API replaces it.
+const FIREBASE_ENABLED = Boolean(FIREBASE_CONFIG.projectId);
+
 const lazy = <T>(load: () => Promise<T>) => {
   let promise: Promise<T> | null = null;
   return () =>
@@ -79,6 +83,9 @@ export const uploadBytesToFirebase = async (
   data: Blob | Uint8Array,
   metadata?: UploadMetadata,
 ) => {
+  if (!FIREBASE_ENABLED) {
+    throw new Error("Firebase is not configured");
+  }
   const { storage, ref, uploadBytes } = await _loadStorage();
   return uploadBytes(ref(storage, path), data, metadata);
 };
@@ -194,6 +201,7 @@ export const saveToFirebase = async (
 ) => {
   const { roomId, roomKey, socket } = portal;
   if (
+    !FIREBASE_ENABLED ||
     // bail if no room exists as there's nothing we can do at this point
     !roomId ||
     !roomKey ||
@@ -254,6 +262,9 @@ export const loadFromFirebase = async (
   roomKey: string,
   socket: Socket | null,
 ): Promise<readonly SyncableExcalidrawElement[] | null> => {
+  if (!FIREBASE_ENABLED) {
+    return null;
+  }
   const { firestore, doc, getDoc } = await _loadFirestore();
   const docRef = doc(firestore, "scenes", roomId);
   const docSnap = await getDoc(docRef);
@@ -280,6 +291,9 @@ export const loadFilesFromFirebase = async (
   filesIds: readonly FileId[],
 ) => {
   const loadedFiles: BinaryFileData[] = [];
+  if (!FIREBASE_ENABLED) {
+    return { loadedFiles, erroredFiles: new Map<FileId, true>() };
+  }
   const erroredFiles = new Map<FileId, true>();
 
   await Promise.all(
