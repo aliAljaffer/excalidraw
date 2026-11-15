@@ -181,7 +181,13 @@ const BoardCard = ({
   );
 };
 
-export const BoardGallery = ({ onClose }: { onClose: () => void }) => {
+export const BoardGallery = ({
+  onClose,
+  onOpenBoard,
+}: {
+  onClose: () => void;
+  onOpenBoard: (id: string) => void;
+}) => {
   const [data, setData] = useState<BoardGalleryData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string | null>(null);
@@ -202,9 +208,7 @@ export const BoardGallery = ({ onClose }: { onClose: () => void }) => {
     void reload();
   }, [reload]);
 
-  const openBoard = (id: string) => {
-    window.location.assign(`/b/${id}`);
-  };
+  const openBoard = (id: string) => onOpenBoard(id);
 
   const visibleBoards = useMemo(() => {
     if (!data || filter === null) {

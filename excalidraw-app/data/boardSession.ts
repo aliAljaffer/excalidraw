@@ -14,16 +14,18 @@ type BoardSession = {
   roomKey: string;
   revision: number;
   dirty: boolean;
+  lastElements: readonly OrderedExcalidrawElement[];
 };
 
 let session: BoardSession | null = null;
+let inFlight: Promise<void> | null = null;
 
 /**
  * Set by the editor: renders the scene to a PNG for the gallery. Kept as a
  * callback so this module never imports the editor.
  */
 let previewRenderer: (() => Promise<Blob | null>) | null = null;
-let previewQueued = false;
+let previewTask: Promise<void> | null = null;
 
 export const setPreviewRenderer = (
   renderer: (() => Promise<Blob | null>) | null,
@@ -31,45 +33,57 @@ export const setPreviewRenderer = (
   previewRenderer = renderer;
 };
 
-const refreshPreview = async () => {
-  if (!session || !previewRenderer || previewQueued || document.hidden) {
-    return;
+const refreshPreview = (): Promise<void> => {
+  if (!session || !previewRenderer || document.hidden) {
+    return Promise.resolve();
   }
-  previewQueued = true;
+  if (previewTask) {
+    return previewTask;
+  }
   const current = session;
-  try {
-    const preview = await previewRenderer();
-    if (preview) {
-      await saveBoardPreview(current.id, preview);
+  previewTask = (async () => {
+    try {
+      const preview = await previewRenderer!();
+      if (preview) {
+        await saveBoardPreview(current.id, preview);
+      }
+    } catch (error) {
+      console.error("board preview failed", error);
+    } finally {
+      previewTask = null;
     }
-  } catch (error) {
-    console.error("board preview failed", error);
-  } finally {
-    previewQueued = false;
-  }
+  })();
+  return previewTask;
 };
 
 export const startBoardSession = (args: {
   id: string;
   roomKey: string;
   revision: number;
+  elements: readonly OrderedExcalidrawElement[];
 }) => {
-  session = { ...args, dirty: false };
+  session = {
+    id: args.id,
+    roomKey: args.roomKey,
+    revision: args.revision,
+    dirty: false,
+    lastElements: args.elements,
+  };
+  inFlight = null;
 };
 
 export const getBoardSession = () => session;
 
 export const endBoardSession = () => {
   session = null;
+  inFlight = null;
 };
 
-export const saveBoardNow = async (
-  elements: readonly OrderedExcalidrawElement[],
-) => {
-  if (!session) {
+const write = async (elements: readonly OrderedExcalidrawElement[]) => {
+  const current = session;
+  if (!current) {
     return;
   }
-  const current = session;
   try {
     const revision = await saveBoard({
       id: current.id,
@@ -77,11 +91,8 @@ export const saveBoardNow = async (
       revision: current.revision,
       elements,
     });
-    if (session === current) {
-      current.revision = revision;
-      current.dirty = false;
-    }
-    void refreshPreview();
+    current.revision = revision;
+    current.dirty = false;
   } catch (error: any) {
     if (error?.message !== "revision") {
       throw error;
@@ -102,15 +113,89 @@ export const saveBoardNow = async (
   }
 };
 
-export const queueBoardSave = throttle(
-  (elements: readonly OrderedExcalidrawElement[]) => {
-    if (!session) {
+/**
+ * Serialized so two writes never race on the same revision. `keepalive` is for
+ * the unload path: the browser finishes the request after the page is gone,
+ * which is what makes a quick switch between boards safe.
+ */
+export const saveBoardNow = async (
+  elements?: readonly OrderedExcalidrawElement[],
+  { keepalive = false }: { keepalive?: boolean } = {},
+) => {
+  if (!session) {
+    return;
+  }
+  const target = elements ?? session.lastElements;
+
+  if (inFlight) {
+    await inFlight.catch(() => {});
+  }
+  if (!session) {
+    return;
+  }
+
+  const run = (async () => {
+    if (keepalive) {
+      await saveBoard({
+        id: session!.id,
+        roomKey: session!.roomKey,
+        revision: session!.revision,
+        elements: target,
+        keepalive: true,
+      }).catch(() => {});
       return;
     }
-    session.dirty = true;
-    void saveBoardNow(elements).catch((error) => {
+    await write(target);
+  })();
+
+  inFlight = run;
+  try {
+    await run;
+  } finally {
+    if (inFlight === run) {
+      inFlight = null;
+    }
+  }
+
+  if (!keepalive) {
+    void refreshPreview();
+  }
+};
+
+const saveThrottled = throttle(
+  () => {
+    void saveBoardNow().catch((error) => {
       console.error("board autosave failed", error);
     });
   },
-  8000,
+  4000,
+  { leading: true, trailing: true },
 );
+
+export const queueBoardSave = (
+  elements: readonly OrderedExcalidrawElement[],
+) => {
+  if (!session) {
+    return;
+  }
+  // always keep the newest scene, even while the throttle is holding a write
+  session.lastElements = elements;
+  session.dirty = true;
+  saveThrottled();
+};
+
+/**
+ * Called before leaving a board, so switching boards never loses the last
+ * edits. Falls back to a keepalive write when the page is already unloading.
+ */
+export const flushBoard = async ({ keepalive = false } = {}) => {
+  if (!session) {
+    return;
+  }
+  saveThrottled.cancel();
+  await saveBoardNow(undefined, { keepalive });
+  if (!keepalive) {
+    // the gallery shows this thumbnail right after, so do not leave it behind
+    await refreshPreview();
+  }
+};

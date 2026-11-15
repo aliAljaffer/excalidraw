@@ -74,13 +74,19 @@ const parse = async <T>(response: Response): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const send = (method: string, path: string, body?: unknown) =>
+const send = (
+  method: string,
+  path: string,
+  body?: unknown,
+  keepalive = false,
+) =>
   fetch(boardURL(path), {
     method,
     headers:
       body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
+    keepalive,
   });
 
 export const fetchGallery = async () =>
@@ -181,22 +187,29 @@ export const saveBoard = async ({
   roomKey,
   revision,
   elements,
+  keepalive = false,
 }: {
   id: string;
   roomKey: string;
   revision: number;
   elements: readonly ExcalidrawElement[];
+  keepalive?: boolean;
 }): Promise<number> => {
   const { encryptedBuffer, iv } = await encryptData(
     roomKey,
     new TextEncoder().encode(JSON.stringify(elements)),
   );
-  const response = await send("PUT", `${encodeURIComponent(id)}/scene`, {
-    ciphertext: bytesToBase64(new Uint8Array(encryptedBuffer)),
-    iv: bytesToBase64(iv),
-    sceneVersion: getSceneVersion(elements),
-    revision,
-  });
+  const response = await send(
+    "PUT",
+    `${encodeURIComponent(id)}/scene`,
+    {
+      ciphertext: bytesToBase64(new Uint8Array(encryptedBuffer)),
+      iv: bytesToBase64(iv),
+      sceneVersion: getSceneVersion(elements),
+      revision,
+    },
+    keepalive,
+  );
   if (response.status === 409) {
     throw new Error("revision");
   }

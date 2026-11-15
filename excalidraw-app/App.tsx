@@ -141,9 +141,9 @@ import DebugCanvas, {
 import { useSimulatedCollaborators } from "./debugCollaborators";
 import { AIComponents } from "./components/AI";
 import {
+  flushBoard,
   getBoardSession,
   queueBoardSave,
-  saveBoardNow,
   setPreviewRenderer,
   startBoardSession,
 } from "./data/boardSession";
@@ -236,6 +236,8 @@ const initializeScene = async (opts: {
       id: board.id,
       roomKey: board.roomKey,
       revision: board.revision,
+      elements:
+        board.elements as unknown as readonly OrderedExcalidrawElement[],
     });
     const fileIds = board.elements
       .filter((element) => isInitializedImageElement(element))
@@ -610,11 +612,7 @@ const ExcalidrawWrapper = () => {
       return;
     }
     const flush = () => {
-      if (getBoardSession()?.dirty) {
-        void saveBoardNow(
-          excalidrawAPI.getSceneElementsIncludingDeleted(),
-        ).catch(() => {});
-      }
+      void flushBoard({ keepalive: true }).catch(() => {});
     };
     const onHidden = () => {
       if (document.hidden) {
@@ -840,6 +838,13 @@ const ExcalidrawWrapper = () => {
 
   const [isBoardGalleryOpen, setIsBoardGalleryOpen] = useState(false);
 
+  // Flush before showing the gallery so the card for the board you are leaving
+  // is never a step behind.
+  const openBoardGallery = async () => {
+    await flushBoard().catch(() => {});
+    setIsBoardGalleryOpen(true);
+  };
+
   const [latestShareableLink, setLatestShareableLink] = useState<string | null>(
     null,
   );
@@ -1044,7 +1049,7 @@ const ExcalidrawWrapper = () => {
       >
         <AppMainMenu
           onCollabDialogOpen={onCollabDialogOpen}
-          onBoardGalleryOpen={() => setIsBoardGalleryOpen(true)}
+          onBoardGalleryOpen={openBoardGallery}
           isCollaborating={isCollaborating}
           isCollabEnabled={isCollabAvailable}
           theme={appTheme}
@@ -1052,7 +1057,7 @@ const ExcalidrawWrapper = () => {
         />
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}
-          onBoardGalleryOpen={() => setIsBoardGalleryOpen(true)}
+          onBoardGalleryOpen={openBoardGallery}
           isCollabEnabled={isCollabAvailable}
         />
         <OverwriteConfirmDialog>
@@ -1062,11 +1067,17 @@ const ExcalidrawWrapper = () => {
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
         {IS_PRIVATE_ENTRY && excalidrawAPI && (
           <FooterLeft>
-            <BoardGalleryButton onOpen={() => setIsBoardGalleryOpen(true)} />
+            <BoardGalleryButton onOpen={openBoardGallery} />
           </FooterLeft>
         )}
         {isBoardGalleryOpen && (
-          <BoardGallery onClose={() => setIsBoardGalleryOpen(false)} />
+          <BoardGallery
+            onClose={() => setIsBoardGalleryOpen(false)}
+            onOpenBoard={async (id) => {
+              await flushBoard().catch(() => {});
+              window.location.assign(`/b/${id}`);
+            }}
+          />
         )}
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
