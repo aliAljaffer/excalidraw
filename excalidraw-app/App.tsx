@@ -473,7 +473,7 @@ const ExcalidrawWrapper = () => {
       if (collabAPI?.isCollaborating()) {
         if (data.scene.elements) {
           collabAPI
-            .fetchImageFilesFromFirebase({
+            .fetchImageFiles({
               elements: data.scene.elements,
               forceFetchFiles: true,
             })
@@ -497,7 +497,7 @@ const ExcalidrawWrapper = () => {
 
         if (data.isExternalScene) {
           if (fileIds.length) {
-            // Direct Firebase call (not through FileManager), so track manually
+            // Share-link files bypass FileManager, so track their status here
             FileStatusStore.updateStatuses(
               fileIds.map((id) => [id, "loading"]),
             );

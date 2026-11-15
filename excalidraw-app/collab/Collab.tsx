@@ -57,7 +57,6 @@ import { appJotaiStore, atom } from "../app-jotai";
 import {
   CURSOR_SYNC_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
-  FIREBASE_STORAGE_PREFIXES,
   INITIAL_SCENE_UPDATE_TIMEOUT,
   LOAD_IMAGES_TIMEOUT,
   shareUrl,
@@ -78,12 +77,12 @@ import {
 import { FileStatusStore } from "../data/fileStatusStore";
 import { LocalData } from "../data/LocalData";
 import {
-  isSavedToFirebase,
-  loadFilesFromFirebase,
-  loadFromFirebase,
-  saveFilesToFirebase,
-  saveToFirebase,
-} from "../data/firebase";
+  isRoomSaved,
+  loadRoomFiles,
+  loadRoomScene,
+  saveRoomFiles,
+  saveRoomScene,
+} from "../data/rooms";
 import {
   importUsernameFromLocalStorage,
   saveUsernameToLocalStorage,
@@ -126,7 +125,7 @@ export interface CollabAPI {
   startCollaboration: CollabInstance["startCollaboration"];
   stopCollaboration: CollabInstance["stopCollaboration"];
   syncElements: CollabInstance["syncElements"];
-  fetchImageFilesFromFirebase: CollabInstance["fetchImageFilesFromFirebase"];
+  fetchImageFiles: CollabInstance["fetchImageFiles"];
   setUsername: CollabInstance["setUsername"];
   getUsername: CollabInstance["getUsername"];
   getActiveRoomLink: CollabInstance["getActiveRoomLink"];
@@ -168,7 +167,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           throw new AbortError();
         }
 
-        return loadFilesFromFirebase(`files/rooms/${roomId}`, roomKey, fileIds);
+        return loadRoomFiles(roomId, roomKey, fileIds);
       },
       saveFiles: async ({ addedFiles }) => {
         const { roomId, roomKey } = this.portal;
@@ -176,8 +175,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           throw new AbortError();
         }
 
-        const { savedFiles, erroredFiles } = await saveFilesToFirebase({
-          prefix: `${FIREBASE_STORAGE_PREFIXES.collabFiles}/${roomId}`,
+        const { savedFiles, erroredFiles } = await saveRoomFiles({
+          roomId,
+          roomKey,
           files: await encodeFilesForUpload({
             files: addedFiles,
             encryptionKey: roomKey,
@@ -245,7 +245,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       onPointerUpdate: this.onPointerUpdate,
       startCollaboration: this.startCollaboration,
       syncElements: this.syncElements,
-      fetchImageFilesFromFirebase: this.fetchImageFilesFromFirebase,
+      fetchImageFiles: this.fetchImageFiles,
       stopCollaboration: this.stopCollaboration,
       setUsername: this.setUsername,
       getUsername: this.getUsername,
@@ -316,11 +316,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (
       this.isCollaborating() &&
       (this.fileManager.shouldPreventUnload(syncableElements) ||
-        !isSavedToFirebase(this.portal, syncableElements))
+        !isRoomSaved(this.portal.roomId, syncableElements))
     ) {
       // this won't run in time if user decides to leave the site, but
       //  the purpose is to run in immediately after user decides to stay
-      this.saveCollabRoomToFirebase(syncableElements);
+      this.saveCollabRoom(syncableElements);
 
       if (import.meta.env.VITE_APP_DISABLE_PREVENT_UNLOAD !== "true") {
         preventUnload(event);
@@ -332,12 +332,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   });
 
-  saveCollabRoomToFirebase = async (
+  saveCollabRoom = async (
     syncableElements: readonly SyncableExcalidrawElement[],
   ) => {
     syncableElements = cloneJSON(syncableElements);
     try {
-      const storedElements = await saveToFirebase(
+      const storedElements = await saveRoomScene(
         this.portal,
         syncableElements,
         this.excalidrawAPI.getAppState(),
@@ -376,11 +376,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   stopCollaboration = (keepRemoteState = true) => {
     this.queueBroadcastAllElements.cancel();
-    this.queueSaveToFirebase.cancel();
+    this.queueSaveRoom.cancel();
     this.loadImageFiles.cancel();
     this.resetErrorIndicator(true);
 
-    this.saveCollabRoomToFirebase(
+    this.saveCollabRoom(
       getSyncableElements(
         this.excalidrawAPI.getSceneElementsIncludingDeleted(),
       ),
@@ -439,7 +439,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
-  private fetchImageFilesFromFirebase = async (opts: {
+  private fetchImageFiles = async (opts: {
     elements: readonly ExcalidrawElement[];
     /**
      * Indicates whether to fetch files that are errored or pending and older
@@ -576,7 +576,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         captureUpdate: CaptureUpdateAction.NEVER,
       });
 
-      this.saveCollabRoomToFirebase(getSyncableElements(elements));
+      this.saveCollabRoom(getSyncableElements(elements));
     }
 
     // fallback in case you're not alone in the room but still don't receive
@@ -743,10 +743,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       this.excalidrawAPI.resetScene();
 
       try {
-        const elements = await loadFromFirebase(
+        const elements = await loadRoomScene(
           roomLinkData.roomId,
           roomLinkData.roomKey,
-          this.portal.socket,
         );
         if (elements) {
           this.setLastBroadcastedOrReceivedSceneVersion(
@@ -805,10 +804,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private loadImageFiles = throttle(async () => {
-    const { loadedFiles, erroredFiles } =
-      await this.fetchImageFilesFromFirebase({
-        elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
-      });
+    const { loadedFiles, erroredFiles } = await this.fetchImageFiles({
+      elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+    });
 
     this.excalidrawAPI.addFiles(loadedFiles);
 
@@ -982,7 +980,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
     this.broadcastElements(elements);
-    this.queueSaveToFirebase();
+    this.queueSaveRoom();
   };
 
   queueBroadcastAllElements = throttle(() => {
@@ -999,10 +997,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.setLastBroadcastedOrReceivedSceneVersion(newVersion);
   }, SYNC_FULL_SCENE_INTERVAL_MS);
 
-  queueSaveToFirebase = throttle(
+  queueSaveRoom = throttle(
     () => {
       if (this.portal.socketInitialized) {
-        this.saveCollabRoomToFirebase(
+        this.saveCollabRoom(
           getSyncableElements(
             this.excalidrawAPI.getSceneElementsIncludingDeleted(),
           ),

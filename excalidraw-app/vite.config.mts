@@ -296,6 +296,9 @@ export default defineConfig(({ mode }) => {
         },
 
         workbox: {
+          // the gallery and the API are server rendered, so the app shell must
+          // never answer their navigations
+          navigateFallbackDenylist: [/^\/boards/, /^\/api\//, /^\/oauth2\//],
           // don't precache fonts, locales and separate chunks
           globIgnores: [
             "fonts.css",
@@ -307,9 +310,6 @@ export default defineConfig(({ mode }) => {
             // via a static import from the main bundle, defeating lazy
             // loading. So we exclude it by name instead.
             "**/CodeMirrorEditor-*.js",
-            // lazy-loaded Firebase SDK, only needed for collab/sharing, which
-            // require network anyway
-            "**/firebaseSDK-*.js",
           ],
           // mermaid chunks are excluded here rather than via `globIgnores`
           // as their file names are arbitrary

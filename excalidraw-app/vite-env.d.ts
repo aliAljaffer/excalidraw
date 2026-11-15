@@ -8,6 +8,8 @@ interface ImportMetaEnv {
   VITE_APP_BACKEND_V2_GET_URL: string;
   VITE_APP_BACKEND_V2_POST_URL: string;
 
+  VITE_APP_ROOMS_URL: string;
+
   // public path every share and collaboration link resolves under
   VITE_APP_SHARE_BASE: string;
 

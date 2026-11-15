@@ -1,13 +1,15 @@
-// Command scenes is the share-link store for the self-hosted Excalidraw app.
+// Command scenes is the share-link and board store for the self-hosted
+// Excalidraw app.
 //
 // The client compresses and encrypts the scene in the browser, so the server
 // only ever sees an opaque blob: POST stores it and returns an id, GET returns
-// the blob for that id.
+// the blob for that id. A board is a private pointer to a room plus a folder.
 package main
 
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,10 +42,53 @@ CREATE TABLE IF NOT EXISTS scene_files (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (scene_id, file_id)
 );
+
+-- A room holds one encrypted scene, written by any participant holding the
+-- room key. token_hash is the sha256 of that key, so the database alone never
+-- yields write access.
+CREATE TABLE IF NOT EXISTS rooms (
+    room_id          text PRIMARY KEY,
+    token_hash       bytea NOT NULL,
+    ciphertext       bytea,
+    iv               bytea,
+    revision         bigint NOT NULL DEFAULT 0,
+    scene_version    bigint NOT NULL DEFAULT 0,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    last_accessed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS rooms_last_accessed_idx ON rooms (last_accessed_at);
+CREATE TABLE IF NOT EXISTS room_files (
+    room_id    text NOT NULL REFERENCES rooms (room_id) ON DELETE CASCADE,
+    file_id    text NOT NULL,
+    payload    bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (room_id, file_id)
+);
+
+CREATE TABLE IF NOT EXISTS folders (
+    id         text PRIMARY KEY,
+    name       text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- room_key is stored so a board opens from any device without a passphrase.
+CREATE TABLE IF NOT EXISTS boards (
+    id         text PRIMARY KEY,
+    name       text NOT NULL,
+    room_id    text NOT NULL,
+    room_key   text NOT NULL,
+    folder_id  text REFERENCES folders (id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS boards_room_idx ON boards (room_id);
+CREATE INDEX IF NOT EXISTS boards_folder_idx ON boards (folder_id);
 `
 
 var (
 	idPattern   = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	slugPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	filePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
@@ -131,6 +176,15 @@ func newID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// newSlug returns a URL-safe id of the given entropy in bytes.
+func newSlug(size int) string {
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
 func clientIP(r *http.Request) string {
@@ -274,6 +328,23 @@ func writeBlob(w http.ResponseWriter, payload []byte) {
 	_, _ = w.Write(payload)
 }
 
+// sweepOnce drops share-link scenes and rooms that no board points at. A board
+// is the promise that the scene stays, so its room is exempt however old it is.
+func (s *server) sweepOnce(ctx context.Context, now time.Time) {
+	cutoff := now.AddDate(0, 0, -s.cfg.retentionDay)
+	if _, err := s.db.Exec(ctx, "DELETE FROM scenes WHERE created_at < $1", cutoff); err != nil {
+		log.Printf("retention sweep scenes: %v", err)
+	}
+	if _, err := s.db.Exec(ctx,
+		`DELETE FROM rooms r
+		 WHERE r.last_accessed_at < $1
+		   AND NOT EXISTS (SELECT 1 FROM boards b WHERE b.room_id = r.room_id)`,
+		cutoff); err != nil {
+		log.Printf("retention sweep rooms: %v", err)
+	}
+	s.limiter.sweep(now)
+}
+
 func (s *server) sweep(ctx context.Context) {
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
@@ -282,11 +353,7 @@ func (s *server) sweep(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			cutoff := now.AddDate(0, 0, -s.cfg.retentionDay)
-			if _, err := s.db.Exec(ctx, "DELETE FROM scenes WHERE created_at < $1", cutoff); err != nil {
-				log.Printf("retention sweep: %v", err)
-			}
-			s.limiter.sweep(now)
+			s.sweepOnce(ctx, now)
 		}
 	}
 }
@@ -314,6 +381,32 @@ func connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return nil, lastErr
 }
 
+func (s *server) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("POST /api/v2/scenes", s.postScene)
+	mux.HandleFunc("GET /api/v2/scenes/{id}", s.getScene)
+	mux.HandleFunc("PUT /api/v2/scenes/{id}/files/{fileId}", s.putFile)
+	mux.HandleFunc("GET /api/v2/scenes/{id}/files/{fileId}", s.getFile)
+
+	mux.HandleFunc("GET /api/v2/rooms/{id}", s.getRoom)
+	mux.HandleFunc("PUT /api/v2/rooms/{id}", s.putRoom)
+	mux.HandleFunc("PUT /api/v2/rooms/{id}/files/{fileId}", s.putRoomFile)
+	mux.HandleFunc("GET /api/v2/rooms/{id}/files/{fileId}", s.getRoomFile)
+
+	mux.HandleFunc("GET /boards", s.gallery)
+	mux.HandleFunc("GET /boards/{id}", s.openBoard)
+	mux.HandleFunc("POST /boards/new", s.createBoard)
+	mux.HandleFunc("POST /boards/{id}/rename", s.renameBoard)
+	mux.HandleFunc("POST /boards/{id}/move", s.moveBoard)
+	mux.HandleFunc("POST /boards/{id}/delete", s.deleteBoard)
+	// Folders live under /boards so the gateway's /boards rule covers them.
+	mux.HandleFunc("POST /boards/folders/new", s.createFolder)
+	mux.HandleFunc("POST /boards/folders/{id}/rename", s.renameFolder)
+	mux.HandleFunc("POST /boards/folders/{id}/delete", s.deleteFolder)
+	return mux
+}
+
 func main() {
 	cfg := load()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -332,16 +425,9 @@ func main() {
 	s := &server{db: db, cfg: cfg, limiter: newLimiter(cfg.perHour)}
 	go s.sweep(ctx)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("POST /api/v2/scenes", s.postScene)
-	mux.HandleFunc("GET /api/v2/scenes/{id}", s.getScene)
-	mux.HandleFunc("PUT /api/v2/scenes/{id}/files/{fileId}", s.putFile)
-	mux.HandleFunc("GET /api/v2/scenes/{id}/files/{fileId}", s.getFile)
-
 	srv := &http.Server{
 		Addr:              cfg.addr,
-		Handler:           mux,
+		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      60 * time.Second,
