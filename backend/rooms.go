@@ -131,6 +131,9 @@ func (s *server) putRoom(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 			return
 		}
+		if err := touchBoards(ctx, tx, roomID); err != nil {
+			log.Printf("touch boards: %v", err)
+		}
 		if err := tx.Commit(ctx); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 			return
@@ -165,11 +168,22 @@ func (s *server) putRoom(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
+	if err := touchBoards(ctx, tx, roomID); err != nil {
+		log.Printf("touch boards: %v", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"revision": next})
+}
+
+// touchBoards keeps the gallery's "last edited" honest: the board row moves
+// whenever its room is written, not only when the board is renamed.
+func touchBoards(ctx context.Context, tx pgx.Tx, roomID string) error {
+	_, err := tx.Exec(ctx,
+		"UPDATE boards SET updated_at = now() WHERE room_id = $1", roomID)
+	return err
 }
 
 // roomToken validates the header token against the stored hash and creates the

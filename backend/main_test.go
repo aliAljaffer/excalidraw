@@ -315,3 +315,34 @@ func TestGalleryRendersHTML(t *testing.T) {
 		t.Fatal("gallery must offer a new folder")
 	}
 }
+
+func TestRoomWriteTouchesTheBoard(t *testing.T) {
+	s := testServer(t)
+	ctx := context.Background()
+	roomID := newSlug(10)
+	if _, err := s.db.Exec(ctx,
+		"INSERT INTO boards (id, name, room_id, room_key, updated_at) VALUES ($1, $2, $3, $4, $5)",
+		newSlug(8), "touched", roomID, newSlug(16), time.Now().Add(-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := map[string]any{
+		"ciphertext":   base64.StdEncoding.EncodeToString([]byte("cipher")),
+		"iv":           base64.StdEncoding.EncodeToString([]byte("iv")),
+		"sceneVersion": 1,
+		"revision":     0,
+		"writeToken":   "token",
+	}
+	if rec := do(t, s, roomRequest(t, "PUT", roomID, "", payload)); rec.Code != http.StatusOK {
+		t.Fatalf("write: got %d", rec.Code)
+	}
+
+	var age time.Duration
+	if err := s.db.QueryRow(ctx,
+		"SELECT now() - updated_at FROM boards WHERE room_id = $1", roomID).Scan(&age); err != nil {
+		t.Fatal(err)
+	}
+	if age > time.Minute {
+		t.Fatalf("a room write must move the board up the gallery, updated_at is %s old", age)
+	}
+}
