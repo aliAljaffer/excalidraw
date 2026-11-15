@@ -2,7 +2,7 @@ import throttle from "lodash.throttle";
 
 import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
 
-import { loadBoard, saveBoard } from "./boards";
+import { loadBoard, saveBoard, saveBoardPreview } from "./boards";
 
 /**
  * A board session is a private document open in the editor: the scene comes
@@ -17,6 +17,37 @@ type BoardSession = {
 };
 
 let session: BoardSession | null = null;
+
+/**
+ * Set by the editor: renders the scene to a PNG for the gallery. Kept as a
+ * callback so this module never imports the editor.
+ */
+let previewRenderer: (() => Promise<Blob | null>) | null = null;
+let previewQueued = false;
+
+export const setPreviewRenderer = (
+  renderer: (() => Promise<Blob | null>) | null,
+) => {
+  previewRenderer = renderer;
+};
+
+const refreshPreview = async () => {
+  if (!session || !previewRenderer || previewQueued || document.hidden) {
+    return;
+  }
+  previewQueued = true;
+  const current = session;
+  try {
+    const preview = await previewRenderer();
+    if (preview) {
+      await saveBoardPreview(current.id, preview);
+    }
+  } catch (error) {
+    console.error("board preview failed", error);
+  } finally {
+    previewQueued = false;
+  }
+};
 
 export const startBoardSession = (args: {
   id: string;
@@ -50,6 +81,7 @@ export const saveBoardNow = async (
       current.revision = revision;
       current.dirty = false;
     }
+    void refreshPreview();
   } catch (error: any) {
     if (error?.message !== "revision") {
       throw error;

@@ -25,6 +25,7 @@ export type BoardSummary = {
   name: string;
   folderId: string;
   updatedAt: string;
+  hasPreview: boolean;
 };
 
 export type FolderSummary = {
@@ -46,6 +47,11 @@ export type BoardGalleryData = {
 };
 
 export const BOARD_PATH = /^\/b\/([A-Za-z0-9_-]{1,64})$/;
+
+export const boardPreviewURL = (board: { id: string; updatedAt: string }) =>
+  `${BOARDS_URL}/${encodeURIComponent(board.id)}/preview?v=${encodeURIComponent(
+    board.updatedAt,
+  )}`;
 
 export const getBoardIdFromPath = () => {
   const match = window.location.pathname.match(BOARD_PATH);
@@ -271,4 +277,14 @@ export const loadBoardFiles = async (
   );
 
   return { loadedFiles, erroredFiles };
+};
+
+export const saveBoardPreview = async (id: string, preview: Blob) => {
+  const response = await fetch(
+    `${BOARDS_URL}/${encodeURIComponent(id)}/preview`,
+    { method: "PUT", body: preview },
+  );
+  if (!response.ok) {
+    throw new Error(`preview upload failed: ${response.status}`);
+  }
 };

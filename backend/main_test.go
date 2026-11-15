@@ -395,3 +395,37 @@ func TestRoomWriteTouchesTheBoard(t *testing.T) {
 		t.Fatalf("a room write must move the board up the gallery, updated_at is %s old", age)
 	}
 }
+
+func TestBoardPreview(t *testing.T) {
+	s := testServer(t)
+	rec := do(t, s, ownerRequest("POST", "/api/boards", `{"name":"Preview"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d", rec.Code)
+	}
+	var board boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &board); err != nil {
+		t.Fatal(err)
+	}
+	if board.HasPreview {
+		t.Fatal("a fresh board has no preview")
+	}
+
+	req := ownerRequest("PUT", "/api/boards/"+board.ID+"/preview", "")
+	req = httptest.NewRequest("PUT", "/api/boards/"+board.ID+"/preview", strings.NewReader("png-bytes"))
+	req.Header.Set("X-Forwarded-Email", "me@example.com")
+	if rec := do(t, s, req); rec.Code != http.StatusNoContent {
+		t.Fatalf("upload preview: got %d (%s)", rec.Code, rec.Body)
+	}
+
+	req = httptest.NewRequest("GET", "/api/boards/"+board.ID+"/preview", nil)
+	req.Header.Set("X-Forwarded-Email", "me@example.com")
+	rec = do(t, s, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "png-bytes" {
+		t.Fatalf("read preview: got %d %q", rec.Code, rec.Body.String())
+	}
+
+	rec = do(t, s, ownerRequest("GET", "/api/boards", ""))
+	if !strings.Contains(rec.Body.String(), `"hasPreview":true`) {
+		t.Fatalf("the list must report the preview, got %s", rec.Body)
+	}
+}

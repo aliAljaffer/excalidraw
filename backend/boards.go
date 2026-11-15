@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,11 @@ import (
 // A board is a private document: the gallery, the scene and its images all sit
 // behind oauth2-proxy. Sharing is a separate, explicit action.
 type boardSummary struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	FolderID  string    `json:"folderId"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	FolderID   string    `json:"folderId"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	HasPreview bool      `json:"hasPreview"`
 }
 
 type folderSummary struct {
@@ -96,7 +98,7 @@ func (s *server) listBoards(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, coalesce(folder_id, ''), updated_at
+		`SELECT id, name, coalesce(folder_id, ''), updated_at, preview IS NOT NULL
 		 FROM boards ORDER BY updated_at DESC`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "gallery unavailable"})
@@ -107,7 +109,7 @@ func (s *server) listBoards(w http.ResponseWriter, r *http.Request) {
 	boards := []boardSummary{}
 	for rows.Next() {
 		var b boardSummary
-		if err := rows.Scan(&b.ID, &b.Name, &b.FolderID, &b.UpdatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.Name, &b.FolderID, &b.UpdatedAt, &b.HasPreview); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "gallery unavailable"})
 			return
 		}
@@ -496,4 +498,49 @@ func (s *server) deleteFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) putBoardPreview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOwner(w, r) {
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
+	if err != nil || len(body) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	tag, err := s.db.Exec(ctx, "UPDATE boards SET preview = $2 WHERE id = $1",
+		r.PathValue("id"), body)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) getBoardPreview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOwner(w, r) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	var preview []byte
+	err := s.db.QueryRow(ctx, "SELECT preview FROM boards WHERE id = $1",
+		r.PathValue("id")).Scan(&preview)
+	if err != nil || len(preview) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	w.Header().Set("Content-Length", strconv.Itoa(len(preview)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(preview)
 }

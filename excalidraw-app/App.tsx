@@ -60,6 +60,8 @@ import {
   useHandleLibrary,
 } from "@excalidraw/excalidraw/data/library";
 
+import { useIconLibraries } from "./useIconLibraries";
+
 import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconcile";
 import type { RestoredDataState } from "@excalidraw/excalidraw/data/restore";
 import type {
@@ -142,8 +144,10 @@ import {
   getBoardSession,
   queueBoardSave,
   saveBoardNow,
+  setPreviewRenderer,
   startBoardSession,
 } from "./data/boardSession";
+import { renderBoardPreview } from "./data/preview";
 import { getBoardIdFromPath, loadBoard, loadBoardFiles } from "./data/boards";
 
 import "./index.scss";
@@ -484,6 +488,8 @@ const ExcalidrawWrapper = () => {
     migrationAdapter: LibraryLocalStorageMigrationAdapter,
   });
 
+  useIconLibraries(excalidrawAPI);
+
   const [, forceRefresh] = useState(false);
 
   useEffect(() => {
@@ -590,6 +596,14 @@ const ExcalidrawWrapper = () => {
     },
     [collabAPI, excalidrawAPI],
   );
+
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+    setPreviewRenderer(() => renderBoardPreview(excalidrawAPI));
+    return () => setPreviewRenderer(null);
+  }, [excalidrawAPI]);
 
   useEffect(() => {
     if (!excalidrawAPI) {

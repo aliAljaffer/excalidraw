@@ -1,9 +1,10 @@
 import { gridIcon } from "@excalidraw/excalidraw/components/icons";
 import { Dialog } from "@excalidraw/excalidraw/components/Dialog";
-import { Button } from "@excalidraw/excalidraw/components/Button";
+import { FilledButton } from "@excalidraw/excalidraw/components/FilledButton";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  boardPreviewURL,
   createBoard,
   createFolder,
   deleteBoard,
@@ -81,7 +82,17 @@ const BoardCard = ({
   return (
     <div className="board-card">
       <button type="button" className="board-card__open" onClick={onOpen}>
-        <span className="board-card__name">{renaming ? board.name : name}</span>
+        {board.hasPreview ? (
+          <img
+            className="board-card__preview"
+            src={boardPreviewURL(board)}
+            alt=""
+            loading="lazy"
+          />
+        ) : (
+          <div className="board-card__preview board-card__preview--empty" />
+        )}
+        <span className="board-card__name">{name}</span>
         <span className="board-card__meta">
           {relativeTime(board.updatedAt)}
         </span>
@@ -105,18 +116,20 @@ const BoardCard = ({
               }
             }}
           />
-          <Button onSelect={commitName} type="button">
+          <FilledButton size="medium" onClick={commitName}>
             Save
-          </Button>
-          <Button
-            onSelect={() => {
+          </FilledButton>
+          <FilledButton
+            size="medium"
+            variant="outlined"
+            color="muted"
+            onClick={() => {
               setName(board.name);
               setRenaming(false);
             }}
-            type="button"
           >
             Cancel
-          </Button>
+          </FilledButton>
         </div>
       ) : (
         <div className="board-card__row board-card__row--actions">
@@ -332,9 +345,9 @@ export const BoardGallery = ({ onClose }: { onClose: () => void }) => {
                   }}
                 />
                 <div className="board-card__row">
-                  <Button onSelect={create} type="button">
+                  <FilledButton size="medium" onClick={create}>
                     Create
-                  </Button>
+                  </FilledButton>
                 </div>
               </div>
 
