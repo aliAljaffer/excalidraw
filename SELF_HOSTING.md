@@ -10,7 +10,7 @@ This fork serves <https://excalidraw.alialjaffer.com>. The Kubernetes manifests 
 - `nginx.conf` adds the content security policy and the headers, and serves the SPA at `/s/`.
 - `excalidraw-app/data/shareFiles.ts` stores share-link images in our own backend, so no Firebase project is needed. `App.tsx` and `excalidraw-app/data/index.ts` call it instead of Firebase Storage.
 - `backend/` is a small Go service (`scenes`) that stores share-link scenes, room scenes, boards and folders. The browser compresses and encrypts the payload before upload, so the service only ever holds opaque blobs.
-- A board is a row pointing at a persisted room, optionally inside a folder. The gallery at `/boards` is server rendered by the same Go service and sits behind the login; the app's nginx forwards `/boards` to it.
+- A board is a private document: a row pointing at a room that only `/api/boards` can reach. The gallery is part of the SPA (footer icon next to zoom and minimap, plus the hamburger menu) and talks to `/api/boards`; a board opens at `/b/<id>` and autosaves there. No socket, no room link, no write token: the login is the gate. Sharing stays an explicit action in the Share dialog.
 - Room persistence replaces the upstream Firebase adapter: `excalidraw-app/data/rooms.ts` writes the encrypted scene to `/api/v2/rooms/{id}` with a revision and a write token (`sha256(roomKey)`, computed in the browser). The Firebase SDK is gone.
 
 Everything else is upstream Excalidraw.
@@ -27,6 +27,15 @@ Everything else is upstream Excalidraw.
 | `PUT` | `/api/v2/rooms/{id}` | Write the scene, rejected on a stale revision or a wrong token |
 | `PUT` | `/api/v2/rooms/{id}/files/{fileId}` | Store one encrypted room image (token in `X-Room-Token`) |
 | `GET` | `/api/v2/rooms/{id}/files/{fileId}` | Return one encrypted room image |
+| `GET` | `/api/boards` | Gallery: folders and boards |
+| `POST` | `/api/boards` | Create a board |
+| `PATCH` | `/api/boards/{id}` | Rename a board or move it between folders |
+| `DELETE` | `/api/boards/{id}` | Delete a board and its room |
+| `GET` | `/api/boards/{id}/scene` | The encrypted scene and its room key |
+| `PUT` | `/api/boards/{id}/scene` | Save the scene, rejected on a stale revision |
+| `POST` | `/api/boards/folders` | Create a folder |
+| `PATCH` | `/api/boards/folders/{id}` | Rename a folder |
+| `DELETE` | `/api/boards/folders/{id}` | Delete a folder, keeping its boards |
 | `GET` | `/healthz` | Database ping |
 
 Environment: `DATABASE_URL` (required), `LISTEN_ADDR`, `MAX_BYTES` (per upload, default 10 MiB), `UPLOADS_PER_HOUR` (per client IP, default 30), `RETENTION_DAYS` (default 90).
@@ -48,4 +57,5 @@ It then pins the digests in the homelab repository and commits as `update-manife
 - Share links with images depend on the `scenes` service; a scene-only link is still served if the image upload failed.
 - A room lives as long as a board points at it. Boards and folders never expire; only share-link scenes and orphaned rooms age out (`RETENTION_DAYS`).
 - Text-to-diagram has no backend: `VITE_APP_AI_BACKEND` is unset, so the dialog fails cleanly instead of calling upstream. A skill-backed service is planned.
+- The boards API trusts `X-Forwarded-Email` from oauth2-proxy and refuses requests without it. It is only reachable for the private paths.
 - Image libraries are not browsable: the upstream library browser and publish flow were removed. Icon libraries will load from a static manifest instead.
