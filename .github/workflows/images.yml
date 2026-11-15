@@ -1,0 +1,149 @@
+name: images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "excalidraw-app/**"
+      - "packages/**"
+      - ".env.production"
+      - "backend/**"
+      - "Dockerfile"
+      - "yarn.lock"
+      - "package.json"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images
+  cancel-in-progress: false
+
+env:
+  APP_IMAGE: harbor.alialjaffer.com/mirror/excalidraw
+  SCENES_IMAGE: harbor.alialjaffer.com/mirror/excalidraw-scenes
+
+jobs:
+  build:
+    runs-on: arc-runner-excalidraw
+    timeout-minutes: 60
+    outputs:
+      app: ${{ steps.app.outputs.digest }}
+      scenes: ${{ steps.scenes.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: harbor.alialjaffer.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Build app image
+        id: app
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.APP_IMAGE }}:${{ github.sha }}
+            ${{ env.APP_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.APP_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.APP_IMAGE }}:buildcache,mode=max
+
+      - name: Build scenes image
+        id: scenes
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          file: backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.SCENES_IMAGE }}:${{ github.sha }}
+            ${{ env.SCENES_IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.SCENES_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.SCENES_IMAGE }}:buildcache,mode=max
+
+      - name: Smoke test app
+        env:
+          DIGEST: ${{ steps.app.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${APP_IMAGE}@${DIGEST}"
+          docker run --rm --entrypoint sh "$image" -c '
+            set -e
+            test -f /usr/share/nginx/html/index.html
+            grep -rqs "excalidraw.alialjaffer.com" /usr/share/nginx/html/assets
+          '
+
+      - name: Smoke test scenes
+        env:
+          DIGEST: ${{ steps.scenes.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${SCENES_IMAGE}@${DIGEST}"
+          out=$(docker run --rm "$image" 2>&1 || true)
+          echo "$out"
+          case "$out" in
+            *DATABASE_URL*) ;;
+            *) echo "::error::scenes did not fail on a missing DATABASE_URL"; exit 1 ;;
+          esac
+
+  pin:
+    needs: build
+    runs-on: arc-runner-excalidraw
+    steps:
+      - name: Mint homelab token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.HOMELAB_APP_ID }}
+          private-key: ${{ secrets.HOMELAB_APP_PRIVATE_KEY }}
+          owner: aliAljaffer
+          repositories: homelab
+
+      - uses: actions/checkout@v5
+        with:
+          repository: aliAljaffer/homelab
+          token: ${{ steps.token.outputs.token }}
+          path: homelab
+
+      - name: Pin digests
+        env:
+          APP_DIGEST: ${{ needs.build.outputs.app }}
+          SCENES_DIGEST: ${{ needs.build.outputs.scenes }}
+        run: |
+          set -euo pipefail
+          cd homelab
+
+          sed -i -E "s#harbor\.alialjaffer\.com/mirror/excalidraw(:[^@[:space:]]+)?(@sha256:[0-9a-f]{64})?#harbor.alialjaffer.com/mirror/excalidraw@${APP_DIGEST}#" \
+            kubernetes/apps/excalidraw/app-deployment.yaml
+          sed -i -E "s#harbor\.alialjaffer\.com/mirror/excalidraw-scenes(:[^@[:space:]]+)?(@sha256:[0-9a-f]{64})?#harbor.alialjaffer.com/mirror/excalidraw-scenes@${SCENES_DIGEST}#" \
+            kubernetes/apps/excalidraw/scenes-deployment.yaml
+
+          git config user.name "update-manifests-homelab[bot]"
+          git config user.email "349350479+update-manifests-homelab[bot]@users.noreply.github.com"
+          git add kubernetes/apps/excalidraw
+          if git diff --cached --quiet; then
+            echo "Digests already pinned."
+            exit 0
+          fi
+          git commit -m "excalidraw: pin images for ${GITHUB_SHA::7}"
+          for _ in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            git pull --rebase origin main
+          done
+          exit 1
