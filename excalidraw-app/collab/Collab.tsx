@@ -60,6 +60,7 @@ import {
   FIREBASE_STORAGE_PREFIXES,
   INITIAL_SCENE_UPDATE_TIMEOUT,
   LOAD_IMAGES_TIMEOUT,
+  shareUrl,
   WS_SUBTYPES,
   SYNC_FULL_SCENE_INTERVAL_MS,
   WS_EVENTS,
@@ -400,7 +401,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // that could have been saved in other tabs while we were collaborating
       resetBrowserStateVersions();
 
-      window.history.pushState({}, APP_NAME, window.location.origin);
+      window.history.pushState({}, APP_NAME, shareUrl());
       this.destroySocketClient();
 
       LocalData.fileStorage.reset();
@@ -543,7 +544,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     try {
       this.portal.socket = this.portal.open(
         socketIOClient(import.meta.env.VITE_APP_WS_SERVER_URL, {
-          transports: ["websocket", "polling"],
+          transports: ["websocket"],
         }),
         roomId,
         roomKey,

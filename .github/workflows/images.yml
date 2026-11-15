@@ -8,6 +8,7 @@ on:
       - "packages/**"
       - ".env.production"
       - "backend/**"
+      - "room/**"
       - "Dockerfile"
       - "yarn.lock"
       - "package.json"
@@ -24,6 +25,7 @@ concurrency:
 env:
   APP_IMAGE: harbor.alialjaffer.com/mirror/excalidraw
   SCENES_IMAGE: harbor.alialjaffer.com/mirror/excalidraw-scenes
+  ROOM_IMAGE: harbor.alialjaffer.com/mirror/excalidraw-room
 
 jobs:
   build:
@@ -32,6 +34,7 @@ jobs:
     outputs:
       app: ${{ steps.app.outputs.digest }}
       scenes: ${{ steps.scenes.outputs.digest }}
+      room: ${{ steps.room.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
 
@@ -71,6 +74,20 @@ jobs:
             ${{ env.SCENES_IMAGE }}:${{ github.sha }}
             ${{ env.SCENES_IMAGE }}:latest
 
+      - name: Build room image
+        id: room
+        uses: docker/build-push-action@v7
+        with:
+          context: room
+          file: room/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.ROOM_IMAGE }}:${{ github.sha }}
+            ${{ env.ROOM_IMAGE }}:latest
+
       - name: Smoke test app
         env:
           DIGEST: ${{ steps.app.outputs.digest }}
@@ -96,6 +113,24 @@ jobs:
             *) echo "::error::scenes did not fail on a missing DATABASE_URL"; exit 1 ;;
           esac
 
+      - name: Smoke test room
+        env:
+          DIGEST: ${{ steps.room.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image="${ROOM_IMAGE}@${DIGEST}"
+          docker run -d --name room -p 18080:8080 "$image"
+          trap 'docker rm -f room >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 10); do
+            if curl -fsS http://localhost:18080/ | grep -q "collaboration server is up"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::room did not answer its health endpoint"
+          docker logs room
+          exit 1
+
   pin:
     needs: build
     runs-on: arc-runner-excalidraw
@@ -119,6 +154,7 @@ jobs:
         env:
           APP_DIGEST: ${{ needs.build.outputs.app }}
           SCENES_DIGEST: ${{ needs.build.outputs.scenes }}
+          ROOM_DIGEST: ${{ needs.build.outputs.room }}
         run: |
           set -euo pipefail
           cd homelab
@@ -127,6 +163,8 @@ jobs:
             kubernetes/apps/excalidraw/app-deployment.yaml
           sed -i -E "s#harbor\.alialjaffer\.com/mirror/excalidraw-scenes(:[^@[:space:]]+)?(@sha256:[0-9a-f]{64})?#harbor.alialjaffer.com/mirror/excalidraw-scenes@${SCENES_DIGEST}#" \
             kubernetes/apps/excalidraw/scenes-deployment.yaml
+          sed -i -E "s#(excalidraw/excalidraw-room|harbor\.alialjaffer\.com/mirror/excalidraw-room)(:[^@[:space:]]+)?(@sha256:[0-9a-f]{64})?#harbor.alialjaffer.com/mirror/excalidraw-room@${ROOM_DIGEST}#" \
+            kubernetes/apps/excalidraw/room-deployment.yaml
 
           git config user.name "update-manifests-homelab[bot]"
           git config user.email "349350479+update-manifests-homelab[bot]@users.noreply.github.com"

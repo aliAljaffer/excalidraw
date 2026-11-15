@@ -6,8 +6,6 @@ import { ViteEjsPlugin } from "vite-plugin-ejs";
 import { VitePWA } from "vite-plugin-pwa";
 import checker from "vite-plugin-checker";
 import { createHtmlPlugin } from "vite-plugin-html";
-import Sitemap from "vite-plugin-sitemap";
-import { woff2BrowserPlugin } from "../scripts/woff2/woff2-vite-plugins";
 
 import { MERMAID_CHUNKS_LIST_NAME } from "./data/cacheMermaidChunks";
 
@@ -271,14 +269,6 @@ export default defineConfig(({ mode }) => {
       assetsInlineLimit: 0,
     },
     plugins: [
-      Sitemap({
-        hostname: "https://excalidraw.com",
-        outDir: "build",
-        changefreq: "monthly",
-        // its static in public folder
-        generateRobotsTxt: false,
-      }),
-      woff2BrowserPlugin(),
       lazyChunksPlugin(
         /[\\/]node_modules[\\/]@excalidraw[\\/]mermaid-to-excalidraw[\\/]/,
         mermaidChunkFileNames,

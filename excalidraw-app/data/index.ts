@@ -33,6 +33,7 @@ import {
   DELETED_ELEMENT_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
   ROOM_ID_BYTES,
+  shareUrl,
 } from "../app_constants";
 
 import { encodeFilesForUpload } from "./FileManager";
@@ -160,7 +161,7 @@ export const getCollaborationLink = (data: {
   roomId: string;
   roomKey: string;
 }) => {
-  return `${window.location.origin}${window.location.pathname}#room=${data.roomId},${data.roomKey}`;
+  return shareUrl(`#room=${data.roomId},${data.roomKey}`);
 };
 
 /**
@@ -279,7 +280,7 @@ export const exportToBackend = async (
     });
     const json = await response.json();
     if (json.id) {
-      const url = new URL(window.location.href);
+      const url = new URL(shareUrl());
       // We need to store the key (and less importantly the id) as hash instead
       // of queryParam in order to never send it to the server
       url.hash = `json=${json.id},${encryptionKey}`;

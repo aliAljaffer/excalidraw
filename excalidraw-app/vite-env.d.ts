@@ -8,6 +8,9 @@ interface ImportMetaEnv {
   VITE_APP_BACKEND_V2_GET_URL: string;
   VITE_APP_BACKEND_V2_POST_URL: string;
 
+  // public path every share and collaboration link resolves under
+  VITE_APP_SHARE_BASE: string;
+
   // collaboration WebSocket server (https: string
   VITE_APP_WS_SERVER_URL: string;
 
@@ -21,8 +24,6 @@ interface ImportMetaEnv {
   // debugging Service Workers.
   VITE_APP_DEV_DISABLE_LIVE_RELOAD: string;
 
-  VITE_APP_DISABLE_SENTRY: string;
-
   // Set this flag to false if you want to open the overlay by default
   VITE_APP_COLLAPSE_OVERLAY: string;
 
@@ -31,10 +32,6 @@ interface ImportMetaEnv {
 
   // Enable PWA in dev server
   VITE_APP_ENABLE_PWA: string;
-
-  VITE_APP_PLUS_LP: string;
-
-  VITE_APP_PLUS_APP: string;
 
   VITE_APP_GIT_SHA: string;
 

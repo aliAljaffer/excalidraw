@@ -52,10 +52,9 @@ export const STORAGE_KEYS = {
   __LEGACY_LOCAL_STORAGE_LIBRARY: "excalidraw-library",
 } as const;
 
-export const COOKIES = {
-  AUTH_STATE_COOKIE: "excplus-auth",
-} as const;
+// Public path of the app. Every link handed to someone else must resolve here,
+// because the private root sits behind a login.
+export const SHARE_BASE = import.meta.env.VITE_APP_SHARE_BASE || "/s/";
 
-export const isExcalidrawPlusSignedUser = document.cookie.includes(
-  COOKIES.AUTH_STATE_COOKIE,
-);
+export const shareUrl = (hash = "") =>
+  `${window.location.origin}${SHARE_BASE}${hash}`;

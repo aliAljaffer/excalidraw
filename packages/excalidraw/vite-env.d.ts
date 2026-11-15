@@ -9,9 +9,6 @@ interface ImportMetaEnv {
   VITE_APP_BACKEND_V2_GET_URL: string;
   VITE_APP_BACKEND_V2_POST_URL: string;
 
-  VITE_APP_LIBRARY_URL: string;
-  VITE_APP_LIBRARY_BACKEND: string;
-
   // collaboration WebSocket server (https: string
   VITE_APP_WS_SERVER_URL: string;
 
@@ -36,7 +33,6 @@ interface ImportMetaEnv {
 
   //Debug flags
 
-  VITE_APP_DISABLE_SENTRY: string;
   // Set this flag to false if you want to open the overlay by default
   VITE_APP_COLLAPSE_OVERLAY: string;
   // Enable eslint in dev server
@@ -45,9 +41,6 @@ interface ImportMetaEnv {
 
   PKG_NAME: string;
   PKG_VERSION: string;
-
-  VITE_APP_PLUS_LP: string;
-  VITE_APP_PLUS_APP: string;
 
   VITE_WORKER_ID: string;
   MODE: string;

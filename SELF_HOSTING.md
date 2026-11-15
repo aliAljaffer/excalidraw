@@ -5,6 +5,9 @@ This fork serves <https://excalidraw.alialjaffer.com>. The Kubernetes manifests 
 ## What this fork changes
 
 - `.env.production` points the collaboration socket and the share-link backend at `excalidraw.alialjaffer.com` instead of `excalidraw.com`.
+- Every share and collaboration link is built from `VITE_APP_SHARE_BASE` (default `/s/`) instead of the current path, so a link made in the private editor still opens for a guest.
+- Sentry, the Excalidraw+ promotions and export, the upstream library browser, and the analytics script are gone. Fonts ship in the image, so no request leaves for Google, DigitalOcean, sentry.io, or esm.sh.
+- `nginx.conf` adds the content security policy and the headers, and serves the SPA at `/s/`.
 - `excalidraw-app/data/shareFiles.ts` stores share-link images in our own backend, so no Firebase project is needed. `App.tsx` and `excalidraw-app/data/index.ts` call it instead of Firebase Storage.
 - `backend/` is a small Go service (`scenes`) that stores scenes and their images. The browser compresses and encrypts the payload before upload, so the service only ever holds opaque blobs.
 
@@ -26,15 +29,16 @@ Without the decryption key in the share link the stored blobs are useless: the k
 
 ## Images
 
-`.github/workflows/images.yml` builds both images on the cluster's ARC runner and pushes them to Harbor:
+`.github/workflows/images.yml` builds all three images on the cluster's ARC runner and pushes them to Harbor:
 
 - `harbor.alialjaffer.com/mirror/excalidraw`
 - `harbor.alialjaffer.com/mirror/excalidraw-scenes`
+- `harbor.alialjaffer.com/mirror/excalidraw-room`
 
 It then pins the digests in the homelab repository and commits as `update-manifests-homelab[bot]`, which triggers ArgoCD. Nothing is deployed by hand.
 
 ## Known limits
 
 - Share links with images depend on the `scenes` service; a scene-only link is still served if the image upload failed.
-- `VITE_APP_AI_BACKEND` still points at `oss-ai.excalidraw.com`. Text-to-diagram will fail until it is replaced.
-- The collaboration room server is the upstream `excalidraw/excalidraw-room` image, unchanged.
+- Text-to-diagram has no backend: `VITE_APP_AI_BACKEND` is unset, so the dialog fails cleanly instead of calling upstream. A skill-backed service is planned.
+- Image libraries are not browsable: the upstream library browser and publish flow were removed. Icon libraries will load from a static manifest instead.
