@@ -243,9 +243,9 @@ describe("library", () => {
 
   it("keeps image files on library items", async () => {
     const fileId = "imageFile1";
-    const dataURL =
-      "data:image/svg+xml;base64," +
-      btoa('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>');
+    const dataURL = `data:image/svg+xml;base64,${btoa(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
+    )}`;
     const libraryJSON = JSON.stringify({
       type: "excalidrawlib",
       version: 2,
