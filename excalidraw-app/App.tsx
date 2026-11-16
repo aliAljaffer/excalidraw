@@ -102,6 +102,7 @@ import Collab, {
 } from "./collab/Collab";
 import { AppFooter } from "./components/AppFooter";
 import { BoardGallery, BoardGalleryButton } from "./components/BoardGallery";
+import { BoardHeader } from "./components/boards/BoardHeader";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
@@ -141,11 +142,13 @@ import DebugCanvas, {
 import { useSimulatedCollaborators } from "./debugCollaborators";
 import { AIComponents } from "./components/AI";
 import {
+  endBoardSession,
   flushBoard,
   getBoardSession,
   queueBoardSave,
   setPreviewRenderer,
   startBoardSession,
+  suppressBoardSave,
 } from "./data/boardSession";
 import { renderBoardPreview } from "./data/preview";
 import { getBoardIdFromPath, loadBoard, loadBoardFiles } from "./data/boards";
@@ -234,6 +237,8 @@ const initializeScene = async (opts: {
     }
     startBoardSession({
       id: board.id,
+      name: board.name,
+      roomId: board.roomId,
       roomKey: board.roomKey,
       revision: board.revision,
       elements:
@@ -672,6 +677,10 @@ const ExcalidrawWrapper = () => {
         !document.hidden &&
         ((collabAPI && !collabAPI.isCollaborating()) || isCollabDisabled)
       ) {
+        // a board is not the scratch drawing, so keep the two stores apart
+        if (getBoardSession()) {
+          return;
+        }
         // don't sync if local state is newer or identical to browser state
         if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)) {
           const localDataState = importFromLocalStorage();
@@ -795,7 +804,7 @@ const ExcalidrawWrapper = () => {
 
     // this check is redundant, but since this is a hot path, it's best
     // not to evaludate the nested expression every time
-    if (!LocalData.isSavePaused()) {
+    if (!getBoardSession() && !LocalData.isSavePaused()) {
       LocalData.save(elements, appState, files, () => {
         if (excalidrawAPI) {
           let didChange = false;
@@ -844,6 +853,111 @@ const ExcalidrawWrapper = () => {
     await flushBoard().catch(() => {});
     setIsBoardGalleryOpen(true);
   };
+
+  // Swap the scene in place so the gallery keeps the single page feel. A full
+  // reload is the fallback when the board cannot be read.
+  const openBoardInPlace = useCallback(
+    async (id: string) => {
+      if (!excalidrawAPI) {
+        return;
+      }
+      if (getBoardSession()?.id === id) {
+        setIsBoardGalleryOpen(false);
+        return;
+      }
+      try {
+        await flushBoard().catch(() => {});
+        if (collabAPI?.isCollaborating()) {
+          collabAPI.stopCollaboration(false);
+        }
+        const board = await loadBoard(id);
+        if (!board) {
+          throw new Error("board not found");
+        }
+        endBoardSession();
+        startBoardSession({
+          id: board.id,
+          name: board.name,
+          roomId: board.roomId,
+          roomKey: board.roomKey,
+          revision: board.revision,
+          elements:
+            board.elements as unknown as readonly OrderedExcalidrawElement[],
+        });
+
+        const fileIds = board.elements
+          .filter((element) => isInitializedImageElement(element))
+          .map((element) => element.fileId);
+        const files: BinaryFiles = {};
+        if (fileIds.length) {
+          const { loadedFiles } = await loadBoardFiles(
+            board.id,
+            board.roomKey,
+            fileIds,
+          );
+          for (const file of loadedFiles) {
+            files[file.id] = file;
+          }
+        }
+
+        const resumeSave = suppressBoardSave();
+        excalidrawAPI.resetScene({ resetLoadingState: true });
+        if (Object.keys(files).length) {
+          excalidrawAPI.addFiles(Object.values(files));
+        }
+        excalidrawAPI.updateScene({
+          elements: board.elements,
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+        });
+        const elements = board.elements;
+        window.setTimeout(() => {
+          if (elements.length) {
+            excalidrawAPI.setViewport({ target: elements, fit: "scale-down" });
+          }
+          resumeSave();
+        });
+        window.history.pushState({}, "", `/b/${id}`);
+        setIsBoardGalleryOpen(false);
+      } catch (error) {
+        console.error("could not open the board in place", error);
+        window.location.assign(`/b/${id}`);
+      }
+    },
+    [excalidrawAPI, collabAPI],
+  );
+
+  const showScratchScene = useCallback(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+    endBoardSession();
+    const localDataState = importFromLocalStorage();
+    excalidrawAPI.resetScene({ resetLoadingState: true });
+    if (localDataState?.elements?.length) {
+      excalidrawAPI.updateScene({
+        elements: restoreElements(localDataState.elements, null, {
+          repairBindings: true,
+          deleteInvisibleElements: true,
+        }),
+        appState: restoreAppState(localDataState.appState, null),
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    }
+    setIsBoardGalleryOpen(false);
+  }, [excalidrawAPI]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const id = getBoardIdFromPath();
+      if (id) {
+        void openBoardInPlace(id);
+      } else {
+        showScratchScene();
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [openBoardInPlace, showScratchScene]);
 
   const [latestShareableLink, setLatestShareableLink] = useState<string | null>(
     null,
@@ -1066,6 +1180,12 @@ const ExcalidrawWrapper = () => {
         </OverwriteConfirmDialog>
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
         {IS_PRIVATE_ENTRY && excalidrawAPI && (
+          <BoardHeader
+            onOpenBoards={openBoardGallery}
+            isCollaborating={isCollaborating}
+          />
+        )}
+        {IS_PRIVATE_ENTRY && excalidrawAPI && (
           <FooterLeft>
             <BoardGalleryButton onOpen={openBoardGallery} />
           </FooterLeft>
@@ -1073,10 +1193,7 @@ const ExcalidrawWrapper = () => {
         {isBoardGalleryOpen && (
           <BoardGallery
             onClose={() => setIsBoardGalleryOpen(false)}
-            onOpenBoard={async (id) => {
-              await flushBoard().catch(() => {});
-              window.location.assign(`/b/${id}`);
-            }}
+            onOpenBoard={openBoardInPlace}
           />
         )}
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}

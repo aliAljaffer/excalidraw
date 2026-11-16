@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
 import { activeRoomLinkAtom } from "../collab/Collab";
+import { flushBoard, getBoardSession } from "../data/boardSession";
 
 import "./ShareDialog.scss";
 import { QRCode } from "./QRCode";
@@ -199,9 +200,25 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
           size="large"
           label={t("roomDialog.button_startSession")}
           icon={playerPlayIcon}
-          onClick={() => {
+          onClick={async () => {
             trackEvent("share", "room creation", `ui (${getFrame()})`);
-            collabAPI.startCollaboration(null);
+            const board = getBoardSession();
+            // a board already has a room and a key, so collaborate in place
+            // instead of opening a second room that leaves the board behind.
+            // the room load resets the scene, so save the board first.
+            if (board) {
+              try {
+                await flushBoard();
+              } catch {
+                collabAPI.setCollabError(
+                  "Could not save the board before starting the session.",
+                );
+                return;
+              }
+            }
+            collabAPI.startCollaboration(
+              board ? { roomId: board.roomId, roomKey: board.roomKey } : null,
+            );
           }}
         />
       </div>

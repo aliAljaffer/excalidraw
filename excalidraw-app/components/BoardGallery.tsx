@@ -14,20 +14,25 @@ import {
   searchIcon,
 } from "@excalidraw/excalidraw/components/icons";
 
+import { setBoardName } from "../data/boardSession";
 import { filterAndSortBoards } from "../data/boardList";
 import {
   createBoard,
   createFolder,
   deleteBoard,
   deleteFolder,
+  duplicateBoard,
   fetchGallery,
   getBoardIdFromPath,
   renameFolder,
+  restoreBoard,
+  saveBoard,
   updateBoard,
 } from "../data/boards";
 
 import { BoardCard } from "./boards/BoardCard";
 import { FolderRow } from "./boards/FolderRow";
+import { BOARD_TEMPLATES, buildTemplate } from "./boards/templates";
 
 import "./BoardGallery.scss";
 
@@ -37,13 +42,14 @@ import type {
   BoardSummary,
   FolderSummary,
 } from "../data/boards";
+import type { BoardTemplateId } from "./boards/templates";
 
 const UNFILED = "";
 const NO_BOARDS: BoardSummary[] = [];
 const NO_FOLDERS: FolderSummary[] = [];
 
 type Confirm =
-  | { kind: "board"; board: BoardSummary }
+  | { kind: "board"; board: BoardSummary; purge: boolean }
   | { kind: "folder"; folder: FolderSummary };
 
 export const BoardGallery = ({
@@ -59,6 +65,8 @@ export const BoardGallery = ({
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<BoardSort>("recent");
   const [folderFilter, setFolderFilter] = useState<string | null>(null);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [trashOnly, setTrashOnly] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [openFolderMenuId, setOpenFolderMenuId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -67,6 +75,7 @@ export const BoardGallery = ({
   const [newFolderName, setNewFolderName] = useState("");
   const [creating, setCreating] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -113,18 +122,62 @@ export const BoardGallery = ({
   const boards = data?.boards ?? NO_BOARDS;
   const folders = data?.folders ?? NO_FOLDERS;
 
+  const activeBoards = useMemo(
+    () => boards.filter((board) => board.deletedAt === null),
+    [boards],
+  );
+  const trashBoards = useMemo(
+    () => boards.filter((board) => board.deletedAt !== null),
+    [boards],
+  );
+  const favoritesCount = activeBoards.filter((board) => board.favorite).length;
+
   const counts = useMemo(() => {
     const total = new Map<string, number>();
-    for (const board of boards) {
+    for (const board of activeBoards) {
       total.set(board.folderId, (total.get(board.folderId) ?? 0) + 1);
     }
     return total;
-  }, [boards]);
+  }, [activeBoards]);
 
   const visible = useMemo(
-    () => filterAndSortBoards(boards, folderFilter, query, sort),
-    [boards, folderFilter, query, sort],
+    () =>
+      filterAndSortBoards(
+        boards,
+        {
+          folderId: favoritesOnly || trashOnly ? null : folderFilter,
+          favorites: favoritesOnly,
+          trash: trashOnly,
+        },
+        query,
+        sort,
+      ),
+    [boards, folderFilter, favoritesOnly, trashOnly, query, sort],
   );
+
+  const showAll = () => {
+    setFolderFilter(null);
+    setFavoritesOnly(false);
+    setTrashOnly(false);
+  };
+
+  const showFavorites = () => {
+    setFolderFilter(null);
+    setFavoritesOnly(true);
+    setTrashOnly(false);
+  };
+
+  const showFolder = (folderId: string | null) => {
+    setFolderFilter(folderId);
+    setFavoritesOnly(false);
+    setTrashOnly(false);
+  };
+
+  const showTrash = () => {
+    setFolderFilter(null);
+    setFavoritesOnly(false);
+    setTrashOnly(true);
+  };
 
   const openBoard = (id: string) => {
     if (id === currentBoardId) {
@@ -149,6 +202,30 @@ export const BoardGallery = ({
     }
   };
 
+  const createFromTemplate = async (template: BoardTemplateId) => {
+    if (creating) {
+      return;
+    }
+    setCreating(true);
+    try {
+      const board = await createBoard({ folderId: folderFilter ?? undefined });
+      await saveBoard({
+        id: board.id,
+        roomKey: board.roomKey,
+        revision: 0,
+        elements: buildTemplate(template),
+      });
+      setTemplatesOpen(false);
+      onOpenBoard(board.id);
+    } catch (e: any) {
+      fail(e, "Could not create the board from the template.");
+      setTemplatesOpen(false);
+      await reload();
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const renameBoard = async (board: BoardSummary, name: string) => {
     setRenamingId(null);
     const trimmed = name.trim();
@@ -158,6 +235,9 @@ export const BoardGallery = ({
     }
     try {
       await updateBoard(board.id, { name: trimmed });
+      if (board.id === currentBoardId) {
+        setBoardName(trimmed);
+      }
       await reload();
     } catch (e: any) {
       fail(e, "Could not rename the board.");
@@ -177,6 +257,33 @@ export const BoardGallery = ({
       fail(e, "Could not move the board.");
     } finally {
       focusSearch();
+    }
+  };
+
+  const toggleFavorite = async (board: BoardSummary) => {
+    try {
+      await updateBoard(board.id, { favorite: !board.favorite });
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not update the favorite.");
+    }
+  };
+
+  const duplicate = async (board: BoardSummary) => {
+    try {
+      await duplicateBoard(board.id);
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not duplicate the board.");
+    }
+  };
+
+  const restore = async (board: BoardSummary) => {
+    try {
+      await restoreBoard(board.id);
+      await reload();
+    } catch (e: any) {
+      fail(e, "Could not restore the board.");
     }
   };
 
@@ -227,7 +334,7 @@ export const BoardGallery = ({
     setConfirmBusy(true);
     try {
       if (confirm.kind === "board") {
-        await deleteBoard(confirm.board.id);
+        await deleteBoard(confirm.board.id, { purge: confirm.purge });
       } else {
         await deleteFolder(confirm.folder.id);
         if (folderFilter === confirm.folder.id) {
@@ -273,6 +380,20 @@ export const BoardGallery = ({
         </>
       );
     }
+    if (trashOnly) {
+      return (
+        <p className="board-gallery__state-text">
+          Trash is empty. Deleted boards stay here for 30 days.
+        </p>
+      );
+    }
+    if (favoritesOnly) {
+      return (
+        <p className="board-gallery__state-text">
+          No favorites yet. Star a board to keep it close.
+        </p>
+      );
+    }
     if (folderFilter !== null) {
       return (
         <p className="board-gallery__state-text">
@@ -286,6 +407,29 @@ export const BoardGallery = ({
       </p>
     );
   };
+
+  const confirmCopy = confirm
+    ? confirm.kind === "folder"
+      ? {
+          title: `Delete the folder “${confirm.folder.name}”?`,
+          body: "Its boards stay, unfiled.",
+          action: "Delete",
+          purge: false,
+        }
+      : confirm.purge
+      ? {
+          title: `Delete “${confirm.board.name}” forever?`,
+          body: "The drawing and its images go with it. This cannot be undone.",
+          action: "Delete forever",
+          purge: true,
+        }
+      : {
+          title: `Move “${confirm.board.name}” to the trash?`,
+          body: "You can restore it for 30 days.",
+          action: "Move to trash",
+          purge: false,
+        }
+    : null;
 
   return (
     <Dialog
@@ -324,9 +468,19 @@ export const BoardGallery = ({
             className="board-gallery__new"
             icon={PlusIcon}
             status={creating ? "loading" : null}
+            disabled={trashOnly}
             onClick={create}
           >
             New board
+          </FilledButton>
+          <FilledButton
+            className="board-gallery__templates"
+            variant="outlined"
+            color="muted"
+            disabled={!data || trashOnly}
+            onClick={() => setTemplatesOpen(true)}
+          >
+            Templates
           </FilledButton>
         </div>
 
@@ -341,21 +495,48 @@ export const BoardGallery = ({
             <button
               type="button"
               className={`board-gallery__rail-item${
-                folderFilter === null ? " is-active" : ""
+                !favoritesOnly && !trashOnly && folderFilter === null
+                  ? " is-active"
+                  : ""
               }`}
-              aria-current={folderFilter === null ? "true" : undefined}
-              onClick={() => setFolderFilter(null)}
+              aria-current={
+                !favoritesOnly && !trashOnly && folderFilter === null
+                  ? "true"
+                  : undefined
+              }
+              onClick={showAll}
             >
               <span className="board-gallery__rail-name">All</span>
-              <span className="board-gallery__rail-count">{boards.length}</span>
+              <span className="board-gallery__rail-count">
+                {activeBoards.length}
+              </span>
             </button>
             <button
               type="button"
               className={`board-gallery__rail-item${
-                folderFilter === UNFILED ? " is-active" : ""
+                favoritesOnly ? " is-active" : ""
               }`}
-              aria-current={folderFilter === UNFILED ? "true" : undefined}
-              onClick={() => setFolderFilter(UNFILED)}
+              aria-current={favoritesOnly ? "true" : undefined}
+              onClick={showFavorites}
+            >
+              <span className="board-gallery__rail-name">Favorites</span>
+              <span className="board-gallery__rail-count">
+                {favoritesCount}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`board-gallery__rail-item${
+                !favoritesOnly && !trashOnly && folderFilter === UNFILED
+                  ? " is-active"
+                  : ""
+              }`}
+              aria-current={
+                !favoritesOnly && !trashOnly && folderFilter === UNFILED
+                  ? "true"
+                  : undefined
+              }
+              onClick={() => showFolder(UNFILED)}
             >
               <span className="board-gallery__rail-name">Unfiled</span>
               <span className="board-gallery__rail-count">
@@ -372,11 +553,13 @@ export const BoardGallery = ({
                 key={folder.id}
                 folder={folder}
                 count={counts.get(folder.id) ?? 0}
-                active={folderFilter === folder.id}
+                active={
+                  !favoritesOnly && !trashOnly && folderFilter === folder.id
+                }
                 menuOpen={openFolderMenuId === folder.id}
                 renaming={renamingFolderId === folder.id}
                 portalRoot={portalRoot}
-                onSelect={() => setFolderFilter(folder.id)}
+                onSelect={() => showFolder(folder.id)}
                 onMenuOpenChange={(open) =>
                   setOpenFolderMenuId(open ? folder.id : null)
                 }
@@ -427,6 +610,22 @@ export const BoardGallery = ({
                 New folder
               </button>
             )}
+
+            <div className="board-gallery__rail-divider" />
+
+            <button
+              type="button"
+              className={`board-gallery__rail-item board-gallery__rail-trash${
+                trashOnly ? " is-active" : ""
+              }`}
+              aria-current={trashOnly ? "true" : undefined}
+              onClick={showTrash}
+            >
+              <span className="board-gallery__rail-name">Trash</span>
+              <span className="board-gallery__rail-count">
+                {trashBoards.length}
+              </span>
+            </button>
           </nav>
 
           <div className="board-gallery__main">
@@ -466,7 +665,15 @@ export const BoardGallery = ({
                     onCommitRename={(name) => renameBoard(board, name)}
                     onCancelRename={() => setRenamingId(null)}
                     onMove={(folderId) => moveBoard(board, folderId)}
-                    onDelete={() => setConfirm({ kind: "board", board })}
+                    onToggleFavorite={() => toggleFavorite(board)}
+                    onDuplicate={() => void duplicate(board)}
+                    onDelete={() =>
+                      setConfirm({ kind: "board", board, purge: false })
+                    }
+                    onRestore={() => void restore(board)}
+                    onPurge={() =>
+                      setConfirm({ kind: "board", board, purge: true })
+                    }
                   />
                 ))}
               </div>
@@ -475,23 +682,15 @@ export const BoardGallery = ({
         </div>
       </div>
 
-      {confirm && (
+      {confirm && confirmCopy && (
         <Dialog
           className="board-confirm"
           size="small"
-          title={
-            confirm.kind === "board"
-              ? `Delete “${confirm.board.name}”?`
-              : `Delete the folder “${confirm.folder.name}”?`
-          }
+          title={confirmCopy.title}
           onCloseRequest={closeConfirm}
           autofocus={false}
         >
-          <p className="board-confirm__text">
-            {confirm.kind === "board"
-              ? "The drawing goes with it. This cannot be undone."
-              : "Its boards stay, unfiled."}
-          </p>
+          <p className="board-confirm__text">{confirmCopy.body}</p>
           <div className="board-confirm__actions">
             <FilledButton
               ref={cancelRef}
@@ -506,8 +705,36 @@ export const BoardGallery = ({
               status={confirmBusy ? "loading" : null}
               onClick={confirmDelete}
             >
-              Delete
+              {confirmCopy.action}
             </FilledButton>
+          </div>
+        </Dialog>
+      )}
+
+      {templatesOpen && (
+        <Dialog
+          className="board-templates"
+          size="small"
+          title="New from a template"
+          onCloseRequest={() => setTemplatesOpen(false)}
+          autofocus={false}
+        >
+          <div className="board-templates__list">
+            {BOARD_TEMPLATES.map((template, index) => (
+              <button
+                key={template.id}
+                type="button"
+                className="board-templates__item"
+                disabled={creating}
+                autoFocus={index === 0}
+                onClick={() => void createFromTemplate(template.id)}
+              >
+                <span className="board-templates__name">{template.name}</span>
+                <span className="board-templates__description">
+                  {template.description}
+                </span>
+              </button>
+            ))}
           </div>
         </Dialog>
       )}
