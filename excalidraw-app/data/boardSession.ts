@@ -25,6 +25,7 @@ type BoardSession = {
   roomId: string;
   roomKey: string;
   revision: number;
+  savedVersion: number;
   dirty: boolean;
   status: BoardSaveStatus;
   lastElements: readonly OrderedExcalidrawElement[];
@@ -153,6 +154,7 @@ export const startBoardSession = (args: {
     roomId: args.roomId,
     roomKey: args.roomKey,
     revision: args.revision,
+    savedVersion: getSceneVersion(args.elements),
     dirty: false,
     status: "saved",
     lastElements: args.elements,
@@ -202,6 +204,7 @@ const write = async (elements: readonly OrderedExcalidrawElement[]) => {
       elements,
     });
     current.revision = revision;
+    current.savedVersion = getSceneVersion(elements);
     // a change made while this request was in flight still needs a save
     current.dirty = current.lastElements !== elements;
     if (!current.dirty) {
@@ -224,6 +227,7 @@ const write = async (elements: readonly OrderedExcalidrawElement[]) => {
       revision: fresh.revision,
       elements,
     });
+    current.savedVersion = getSceneVersion(elements);
     current.dirty = current.lastElements !== elements;
     if (!current.dirty) {
       setStatus("saved");
@@ -249,6 +253,13 @@ export const saveBoardNow = async (
     await inFlight.catch(() => {});
   }
   if (!session) {
+    return;
+  }
+  if (
+    !keepalive &&
+    !session.dirty &&
+    getSceneVersion(target) === session.savedVersion
+  ) {
     return;
   }
 
@@ -296,15 +307,17 @@ export const queueBoardSave = (
   if (!session || suppressed > 0) {
     return;
   }
+  const version = getSceneVersion(elements);
   if (initialVersion !== null) {
-    const version = getSceneVersion(elements);
+    const expected = initialVersion;
     initialVersion = null;
-    if (
-      version === session.revision ||
-      version === getSceneVersion(session.lastElements)
-    ) {
+    if (version === expected) {
       return;
     }
+  }
+  // a tool click, a modifier key or a pan changes appState, not the scene
+  if (!session.dirty && version === session.savedVersion) {
+    return;
   }
   // always keep the newest scene, even while the throttle is holding a write
   session.lastElements = elements;
