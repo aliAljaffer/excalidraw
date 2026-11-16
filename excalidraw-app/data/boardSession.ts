@@ -307,17 +307,24 @@ export const queueBoardSave = (
   if (!session || suppressed > 0) {
     return;
   }
-  const version = getSceneVersion(elements);
   if (initialVersion !== null) {
     const expected = initialVersion;
     initialVersion = null;
-    if (version === expected) {
+    if (getSceneVersion(elements) === expected) {
+      session.lastElements = elements;
       return;
     }
   }
-  // a tool click, a modifier key or a pan changes appState, not the scene
-  if (!session.dirty && version === session.savedVersion) {
-    return;
+  if (!session.dirty) {
+    // appState changes reuse the scene array, so this skips the version scan
+    if (elements === session.lastElements) {
+      return;
+    }
+    if (getSceneVersion(elements) === session.savedVersion) {
+      // adopt the editor's array so later appState changes take the fast path
+      session.lastElements = elements;
+      return;
+    }
   }
   // always keep the newest scene, even while the throttle is holding a write
   session.lastElements = elements;
