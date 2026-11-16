@@ -275,8 +275,26 @@ func TestBoardLifecycle(t *testing.T) {
 		"SELECT room_id FROM boards WHERE id = $1", created.ID).Scan(&roomID); err != nil {
 		t.Fatal(err)
 	}
+
 	if rec := do(t, s, ownerRequest("DELETE", "/api/boards/"+created.ID, "")); rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: got %d", rec.Code)
+	}
+	rec = do(t, s, ownerRequest("GET", "/api/boards", ""))
+	if !strings.Contains(rec.Body.String(), `"deletedAt":"`) {
+		t.Fatalf("a trashed board must keep its row and its deletion time, got %s", rec.Body)
+	}
+	if rec := do(t, s, ownerRequest("GET", "/api/boards/"+created.ID+"/scene", "")); rec.Code != http.StatusNotFound {
+		t.Fatalf("a trashed board must not open its scene, got %d", rec.Code)
+	}
+	if rec := do(t, s, ownerRequest("POST", "/api/boards/"+created.ID+"/restore", "")); rec.Code != http.StatusOK {
+		t.Fatalf("restore: got %d (%s)", rec.Code, rec.Body)
+	}
+	if rec := do(t, s, ownerRequest("GET", "/api/boards/"+created.ID+"/scene", "")); rec.Code != http.StatusOK {
+		t.Fatalf("a restored board must open again, got %d", rec.Code)
+	}
+
+	if rec := do(t, s, ownerRequest("DELETE", "/api/boards/"+created.ID+"?purge=1", "")); rec.Code != http.StatusNoContent {
+		t.Fatalf("purge: got %d", rec.Code)
 	}
 	var rooms int
 	if err := s.db.QueryRow(context.Background(),
@@ -284,7 +302,198 @@ func TestBoardLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rooms != 0 {
-		t.Fatal("deleting a board must drop its room when nothing else points at it")
+		t.Fatal("purging a board must drop its room when nothing else points at it")
+	}
+}
+
+func TestBoardFavoriteDoesNotReorder(t *testing.T) {
+	s := testServer(t)
+	rec := do(t, s, ownerRequest("POST", "/api/boards", `{"name":"Starred"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d", rec.Code)
+	}
+	var created boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = do(t, s, ownerRequest("PATCH", "/api/boards/"+created.ID, `{"favorite":true}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("favorite: got %d (%s)", rec.Code, rec.Body)
+	}
+	var updated boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Favorite {
+		t.Fatal("the board must report its favorite flag")
+	}
+	if !updated.UpdatedAt.Equal(created.UpdatedAt) {
+		t.Fatalf("starring must not count as an edit: %s -> %s", created.UpdatedAt, updated.UpdatedAt)
+	}
+}
+
+func TestBoardDuplicate(t *testing.T) {
+	s := testServer(t)
+	rec := do(t, s, ownerRequest("POST", "/api/boards", `{"name":"Source"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d", rec.Code)
+	}
+	var created createdBoard
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := do(t, s, ownerRequest("PUT", "/api/boards/"+created.ID+"/scene",
+		`{"ciphertext":"`+base64.StdEncoding.EncodeToString([]byte("scene"))+`","iv":"`+
+			base64.StdEncoding.EncodeToString([]byte("iv"))+`","sceneVersion":1,"revision":0}`)); rec.Code != http.StatusOK {
+		t.Fatalf("write scene: got %d (%s)", rec.Code, rec.Body)
+	}
+	fileReq := httptest.NewRequest("PUT", "/api/boards/"+created.ID+"/files/file1", strings.NewReader("blob"))
+	fileReq.Header.Set("X-Forwarded-Email", "me@example.com")
+	if rec := do(t, s, fileReq); rec.Code != http.StatusNoContent {
+		t.Fatalf("write file: got %d (%s)", rec.Code, rec.Body)
+	}
+	previewReq := httptest.NewRequest("PUT", "/api/boards/"+created.ID+"/preview", strings.NewReader("png"))
+	previewReq.Header.Set("X-Forwarded-Email", "me@example.com")
+	if rec := do(t, s, previewReq); rec.Code != http.StatusNoContent {
+		t.Fatalf("write preview: got %d", rec.Code)
+	}
+
+	var sourceRoomID string
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT room_id FROM boards WHERE id = $1", created.ID).Scan(&sourceRoomID); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = do(t, s, ownerRequest("POST", "/api/boards/"+created.ID+"/duplicate", ""))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("duplicate: got %d (%s)", rec.Code, rec.Body)
+	}
+	var copy boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &copy); err != nil {
+		t.Fatal(err)
+	}
+	if copy.ID == created.ID || copy.Name != "Source (copy)" || !copy.HasPreview {
+		t.Fatalf("unexpected copy %+v", copy)
+	}
+
+	rec = do(t, s, ownerRequest("GET", "/api/boards/"+copy.ID+"/scene", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read copy scene: got %d", rec.Code)
+	}
+	var copiedScene boardScene
+	if err := json.Unmarshal(rec.Body.Bytes(), &copiedScene); err != nil {
+		t.Fatal(err)
+	}
+	if copiedScene.RoomID == sourceRoomID || copiedScene.RoomKey != created.RoomKey {
+		t.Fatalf("the copy needs its own room and the same key, got %+v", copiedScene)
+	}
+	if copiedScene.Ciphertext != base64.StdEncoding.EncodeToString([]byte("scene")) {
+		t.Fatal("the copy must carry the source scene")
+	}
+
+	fileGet := httptest.NewRequest("GET", "/api/boards/"+copy.ID+"/files/file1", nil)
+	fileGet.Header.Set("X-Forwarded-Email", "me@example.com")
+	if rec := do(t, s, fileGet); rec.Code != http.StatusOK || rec.Body.String() != "blob" {
+		t.Fatalf("copy file: got %d %q", rec.Code, rec.Body.String())
+	}
+
+	var roomID, roomKey string
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT room_id, room_key FROM boards WHERE id = $1", copy.ID).Scan(&roomID, &roomKey); err != nil {
+		t.Fatal(err)
+	}
+	var storedToken []byte
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT token_hash FROM rooms WHERE room_id = $1", roomID).Scan(&storedToken); err != nil {
+		t.Fatal(err)
+	}
+	if !tokenMatches(storedToken, hashToken(boardRoomToken(roomKey))) {
+		t.Fatal("the copy's room must accept collaboration writes")
+	}
+
+	if rec := do(t, s, ownerRequest("DELETE", "/api/boards/"+created.ID, "")); rec.Code != http.StatusNoContent {
+		t.Fatalf("trash the source: got %d", rec.Code)
+	}
+	rec = do(t, s, ownerRequest("GET", "/api/boards", ""))
+	if !strings.Contains(rec.Body.String(), copy.ID) {
+		t.Fatal("trashing the source must not touch the copy")
+	}
+}
+
+func TestBoardRoomAcceptsCollabWrites(t *testing.T) {
+	s := testServer(t)
+	rec := do(t, s, ownerRequest("POST", "/api/boards", `{"name":"Collab"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d", rec.Code)
+	}
+	var created createdBoard
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, s, ownerRequest("PUT", "/api/boards/"+created.ID+"/scene",
+		`{"ciphertext":"`+base64.StdEncoding.EncodeToString([]byte("scene"))+`","iv":"`+
+			base64.StdEncoding.EncodeToString([]byte("iv"))+`","sceneVersion":1,"revision":0}`)); rec.Code != http.StatusOK {
+		t.Fatalf("write scene: got %d (%s)", rec.Code, rec.Body)
+	}
+
+	var roomID string
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT room_id FROM boards WHERE id = $1", created.ID).Scan(&roomID); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{
+		"ciphertext":   base64.StdEncoding.EncodeToString([]byte("collab")),
+		"iv":           base64.StdEncoding.EncodeToString([]byte("iv")),
+		"sceneVersion": 2,
+		"revision":     1,
+		"writeToken":   boardRoomToken(created.RoomKey),
+	}
+	if rec := do(t, s, roomRequest(t, "PUT", roomID, "", payload)); rec.Code != http.StatusOK {
+		t.Fatalf("a board room must accept the collaboration write token, got %d (%s)", rec.Code, rec.Body)
+	}
+}
+
+func TestTrashedBoardIsPurgedAfterAMonth(t *testing.T) {
+	s := testServer(t)
+	rec := do(t, s, ownerRequest("POST", "/api/boards", `{"name":"Old"}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d", rec.Code)
+	}
+	var created boardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	var roomID string
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT room_id FROM boards WHERE id = $1", created.ID).Scan(&roomID); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, s, ownerRequest("PUT", "/api/boards/"+created.ID+"/scene",
+		`{"ciphertext":"`+base64.StdEncoding.EncodeToString([]byte("scene"))+`","iv":"`+
+			base64.StdEncoding.EncodeToString([]byte("iv"))+`","sceneVersion":1,"revision":0}`)); rec.Code != http.StatusOK {
+		t.Fatalf("write scene: got %d (%s)", rec.Code, rec.Body)
+	}
+	if _, err := s.db.Exec(context.Background(),
+		"UPDATE boards SET deleted_at = now() - interval '31 days' WHERE id = $1", created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := do(t, s, ownerRequest("GET", "/api/boards", "")); rec.Code != http.StatusOK {
+		t.Fatalf("list: got %d", rec.Code)
+	}
+	var boards, rooms int
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT count(*) FROM boards WHERE id = $1", created.ID).Scan(&boards); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(context.Background(),
+		"SELECT count(*) FROM rooms WHERE room_id = $1", roomID).Scan(&rooms); err != nil {
+		t.Fatal(err)
+	}
+	if boards != 0 || rooms != 0 {
+		t.Fatalf("a board trashed over 30 days ago must be purged, got %d boards and %d rooms", boards, rooms)
 	}
 }
 

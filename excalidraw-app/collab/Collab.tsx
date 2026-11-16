@@ -718,7 +718,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     this.initializeIdleDetector();
 
-    this.setActiveRoomLink(window.location.href);
+    // on a board the URL stays /b/<id>, so hand out the public room link
+    this.setActiveRoomLink(
+      existingRoomLinkData
+        ? getCollaborationLink(existingRoomLinkData)
+        : window.location.href,
+    );
 
     return scenePromise;
   };

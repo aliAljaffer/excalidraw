@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,11 +21,20 @@ import (
 // A board is a private document: the gallery, the scene and its images all sit
 // behind oauth2-proxy. Sharing is a separate, explicit action.
 type boardSummary struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	FolderID   string    `json:"folderId"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	HasPreview bool      `json:"hasPreview"`
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	FolderID   string     `json:"folderId"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+	HasPreview bool       `json:"hasPreview"`
+	Favorite   bool       `json:"favorite"`
+	DeletedAt  *time.Time `json:"deletedAt"`
+}
+
+// createdBoard also carries the key a new board needs so the client can seed a
+// template before the first editor session.
+type createdBoard struct {
+	boardSummary
+	RoomKey string `json:"roomKey"`
 }
 
 type folderSummary struct {
@@ -43,6 +53,8 @@ type boardScene struct {
 	Revision     int64  `json:"revision"`
 	SceneVersion int64  `json:"sceneVersion"`
 	RoomKey      string `json:"roomKey"`
+	RoomID       string `json:"roomId"`
+	Name         string `json:"name"`
 }
 
 // requireOwner refuses anything that did not come through oauth2-proxy. The
@@ -74,6 +86,14 @@ func (s *server) requireOwner(w http.ResponseWriter, r *http.Request) bool {
 
 var missingHeaderOnce sync.Once
 
+// boardRoomToken is the write token the collaboration client derives from a
+// room key. Storing its hash lets a board room also accept collaborative
+// writes, not just board autosaves.
+func boardRoomToken(roomKey string) string {
+	sum := sha256.Sum256([]byte(roomKey))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 func decodeJSON(w http.ResponseWriter, r *http.Request, into any) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
@@ -97,9 +117,26 @@ func (s *server) listBoards(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// Trashed boards are purged a month after deletion. Rooms are shared with
+	// collaboration, so only drop the ones no live board points at any more.
+	if _, err := s.db.Exec(ctx,
+		`DELETE FROM rooms r
+		 WHERE r.room_id IN (SELECT room_id FROM boards WHERE deleted_at < now() - interval '30 days')
+		   AND NOT EXISTS (
+		     SELECT 1 FROM boards b WHERE b.room_id = r.room_id
+		       AND (b.deleted_at IS NULL OR b.deleted_at >= now() - interval '30 days')
+		   )`); err != nil {
+		log.Printf("purge trashed board rooms: %v", err)
+	}
+	if _, err := s.db.Exec(ctx,
+		"DELETE FROM boards WHERE deleted_at < now() - interval '30 days'"); err != nil {
+		log.Printf("purge trashed boards: %v", err)
+	}
+
 	rows, err := s.db.Query(ctx,
-		`SELECT id, name, coalesce(folder_id, ''), updated_at, preview IS NOT NULL
-		 FROM boards ORDER BY updated_at DESC`)
+		`SELECT id, name, coalesce(folder_id, ''), updated_at, preview IS NOT NULL,
+		        favorite, deleted_at
+		 FROM boards ORDER BY deleted_at NULLS FIRST, favorite DESC, updated_at DESC`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "gallery unavailable"})
 		return
@@ -109,7 +146,8 @@ func (s *server) listBoards(w http.ResponseWriter, r *http.Request) {
 	boards := []boardSummary{}
 	for rows.Next() {
 		var b boardSummary
-		if err := rows.Scan(&b.ID, &b.Name, &b.FolderID, &b.UpdatedAt, &b.HasPreview); err != nil {
+		if err := rows.Scan(&b.ID, &b.Name, &b.FolderID, &b.UpdatedAt, &b.HasPreview,
+			&b.Favorite, &b.DeletedAt); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "gallery unavailable"})
 			return
 		}
@@ -175,11 +213,14 @@ func (s *server) createBoard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not create the board"})
 		return
 	}
-	writeJSON(w, http.StatusCreated, boardSummary{
-		ID:        boardID,
-		Name:      name,
-		FolderID:  req.FolderID,
-		UpdatedAt: created,
+	writeJSON(w, http.StatusCreated, createdBoard{
+		boardSummary: boardSummary{
+			ID:        boardID,
+			Name:      name,
+			FolderID:  req.FolderID,
+			UpdatedAt: created,
+		},
+		RoomKey: roomKey,
 	})
 }
 
@@ -190,11 +231,12 @@ func (s *server) updateBoard(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name     *string `json:"name"`
 		FolderID *string `json:"folderId"`
+		Favorite *bool   `json:"favorite"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Name == nil && req.FolderID == nil {
+	if req.Name == nil && req.FolderID == nil && req.Favorite == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nothing to update"})
 		return
 	}
@@ -211,11 +253,14 @@ func (s *server) updateBoard(w http.ResponseWriter, r *http.Request) {
 		`UPDATE boards
 		 SET name = coalesce($2, name),
 		     folder_id = case when $3 then $4 else folder_id end,
-		     updated_at = now()
-		 WHERE id = $1
-		 RETURNING id, name, coalesce(folder_id, ''), updated_at`,
-		r.PathValue("id"), req.Name, req.FolderID != nil, folder).
-		Scan(&board.ID, &board.Name, &board.FolderID, &board.UpdatedAt)
+		     favorite = coalesce($5, favorite),
+		     updated_at = case when $2 is not null or $3 then now() else updated_at end
+		 WHERE id = $1 AND deleted_at IS NULL
+		 RETURNING id, name, coalesce(folder_id, ''), updated_at,
+		           preview IS NOT NULL, favorite, deleted_at`,
+		r.PathValue("id"), req.Name, req.FolderID != nil, folder, req.Favorite).
+		Scan(&board.ID, &board.Name, &board.FolderID, &board.UpdatedAt,
+			&board.HasPreview, &board.Favorite, &board.DeletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
 		return
@@ -227,14 +272,30 @@ func (s *server) updateBoard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, board)
 }
 
-// deleteBoard drops the board, and the room with it when no other board points
-// at the same room.
+// deleteBoard moves a board to the trash. A purge removes it and its room for
+// good, but only when no other board points at the room.
 func (s *server) deleteBoard(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOwner(w, r) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+
+	if r.URL.Query().Get("purge") != "1" {
+		tag, err := s.db.Exec(ctx,
+			"UPDATE boards SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
+			r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not delete the board"})
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -267,6 +328,115 @@ func (s *server) deleteBoard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *server) restoreBoard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOwner(w, r) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	var board boardSummary
+	err := s.db.QueryRow(ctx,
+		`UPDATE boards SET deleted_at = NULL, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NOT NULL
+		 RETURNING id, name, coalesce(folder_id, ''), updated_at,
+		           preview IS NOT NULL, favorite, deleted_at`,
+		r.PathValue("id")).
+		Scan(&board.ID, &board.Name, &board.FolderID, &board.UpdatedAt,
+			&board.HasPreview, &board.Favorite, &board.DeletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not restore the board"})
+		return
+	}
+	writeJSON(w, http.StatusOK, board)
+}
+
+// duplicateBoard copies the row, the room scene, its files and the preview. The
+// copy keeps the room key because the ciphertext cannot be re-encrypted on the
+// server, but it always gets its own room, so the two boards edit independently.
+func (s *server) duplicateBoard(w http.ResponseWriter, r *http.Request) {
+	if !s.requireOwner(w, r) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not copy the board"})
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var (
+		name    string
+		folder  *string
+		roomID  string
+		roomKey string
+		preview []byte
+	)
+	err = tx.QueryRow(ctx,
+		`SELECT name, folder_id, room_id, room_key, preview
+		 FROM boards WHERE id = $1 AND deleted_at IS NULL`,
+		r.PathValue("id")).Scan(&name, &folder, &roomID, &roomKey, &preview)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not copy the board"})
+		return
+	}
+
+	boardID := newSlug(8)
+	newRoomID := newSlug(10)
+	copiedName := name + " (copy)"
+
+	var created time.Time
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO boards (id, name, room_id, room_key, folder_id, preview)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING updated_at`,
+		boardID, copiedName, newRoomID, roomKey, folder, preview).Scan(&created); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not copy the board"})
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO rooms (room_id, token_hash, ciphertext, iv, revision, scene_version)
+		 SELECT $1, $2, ciphertext, iv, 1, scene_version
+		 FROM rooms WHERE room_id = $3 AND ciphertext IS NOT NULL`,
+		newRoomID, hashToken(boardRoomToken(roomKey)), roomID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not copy the board"})
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO room_files (room_id, file_id, payload)
+		 SELECT $1, file_id, payload FROM room_files WHERE room_id = $2`,
+		newRoomID, roomID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not copy the board"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not copy the board"})
+		return
+	}
+
+	folderID := ""
+	if folder != nil {
+		folderID = *folder
+	}
+	writeJSON(w, http.StatusCreated, boardSummary{
+		ID:         boardID,
+		Name:       copiedName,
+		FolderID:   folderID,
+		UpdatedAt:  created,
+		HasPreview: len(preview) > 0,
+	})
+}
+
 func (s *server) getBoardScene(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOwner(w, r) {
 		return
@@ -276,15 +446,16 @@ func (s *server) getBoardScene(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		roomID, roomKey string
+		name            string
 		ciphertext, iv  []byte
 		revision        int64
 		sceneVersion    int64
 	)
 	err := s.db.QueryRow(ctx,
-		`SELECT b.room_id, b.room_key, r.ciphertext, r.iv, coalesce(r.revision, 0), coalesce(r.scene_version, 0)
+		`SELECT b.name, b.room_id, b.room_key, r.ciphertext, r.iv, coalesce(r.revision, 0), coalesce(r.scene_version, 0)
 		 FROM boards b LEFT JOIN rooms r ON r.room_id = b.room_id
-		 WHERE b.id = $1`,
-		r.PathValue("id")).Scan(&roomID, &roomKey, &ciphertext, &iv, &revision, &sceneVersion)
+		 WHERE b.id = $1 AND b.deleted_at IS NULL`,
+		r.PathValue("id")).Scan(&name, &roomID, &roomKey, &ciphertext, &iv, &revision, &sceneVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
 		return
@@ -294,7 +465,13 @@ func (s *server) getBoardScene(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scene := boardScene{RoomKey: roomKey, Revision: revision, SceneVersion: sceneVersion}
+	scene := boardScene{
+		RoomKey:      roomKey,
+		RoomID:       roomID,
+		Name:         name,
+		Revision:     revision,
+		SceneVersion: sceneVersion,
+	}
 	if ciphertext != nil {
 		scene.Ciphertext = base64.StdEncoding.EncodeToString(ciphertext)
 		scene.IV = base64.StdEncoding.EncodeToString(iv)
@@ -327,10 +504,10 @@ func (s *server) putBoardScene(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var roomID string
+	var roomID, roomKey string
 	if err := tx.QueryRow(ctx,
-		"SELECT room_id FROM boards WHERE id = $1 FOR UPDATE",
-		r.PathValue("id")).Scan(&roomID); errors.Is(err, pgx.ErrNoRows) {
+		"SELECT room_id, room_key FROM boards WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+		r.PathValue("id")).Scan(&roomID, &roomKey); errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
 		return
 	}
@@ -338,15 +515,17 @@ func (s *server) putBoardScene(w http.ResponseWriter, r *http.Request) {
 	var revision int64
 	err = tx.QueryRow(ctx,
 		`INSERT INTO rooms (room_id, token_hash, ciphertext, iv, revision, scene_version)
-		 VALUES ($1, decode('', 'hex'), $2, $3, 1, $4)
+		 VALUES ($1, $2, $3, $4, 1, $5)
 		 ON CONFLICT (room_id) DO UPDATE
 		   SET ciphertext = EXCLUDED.ciphertext, iv = EXCLUDED.iv,
 		       revision = rooms.revision + 1,
 		       scene_version = EXCLUDED.scene_version,
+		       token_hash = case when length(rooms.token_hash) = 0
+		                         then EXCLUDED.token_hash else rooms.token_hash end,
 		       updated_at = now(), last_accessed_at = now()
-		 WHERE rooms.revision = $5 OR rooms.ciphertext IS NULL
+		 WHERE rooms.revision = $6 OR rooms.ciphertext IS NULL
 		 RETURNING revision`,
-		roomID, ciphertext, iv, req.SceneVersion, req.Revision).Scan(&revision)
+		roomID, hashToken(boardRoomToken(roomKey)), ciphertext, iv, req.SceneVersion, req.Revision).Scan(&revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var current int64
 		_ = tx.QueryRow(ctx, "SELECT revision FROM rooms WHERE room_id = $1", roomID).Scan(&current)
@@ -381,7 +560,8 @@ func (s *server) putBoardFile(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var roomID string
-	err := s.db.QueryRow(ctx, "SELECT room_id FROM boards WHERE id = $1", boardID).Scan(&roomID)
+	err := s.db.QueryRow(ctx,
+		"SELECT room_id FROM boards WHERE id = $1 AND deleted_at IS NULL", boardID).Scan(&roomID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such board"})
 		return
@@ -511,7 +691,8 @@ func (s *server) putBoardPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	tag, err := s.db.Exec(ctx, "UPDATE boards SET preview = $2 WHERE id = $1",
+	tag, err := s.db.Exec(ctx,
+		"UPDATE boards SET preview = $2 WHERE id = $1 AND deleted_at IS NULL",
 		r.PathValue("id"), body)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"})

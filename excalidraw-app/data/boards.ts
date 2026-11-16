@@ -26,7 +26,11 @@ export type BoardSummary = {
   folderId: string;
   updatedAt: string;
   hasPreview: boolean;
+  favorite: boolean;
+  deletedAt: string | null;
 };
+
+export type CreatedBoard = BoardSummary & { roomKey: string };
 
 export type FolderSummary = {
   id: string;
@@ -39,6 +43,8 @@ export type BoardScene = {
   revision: number;
   sceneVersion: number;
   roomKey: string;
+  roomId: string;
+  name: string;
 };
 
 export type BoardGalleryData = {
@@ -95,19 +101,30 @@ export const fetchGallery = async () =>
 export const createBoard = async (input: {
   name?: string;
   folderId?: string;
-}) => parse<BoardSummary>(await send("POST", "", input));
+}) => parse<CreatedBoard>(await send("POST", "", input));
 
 export const updateBoard = async (
   id: string,
-  input: { name?: string; folderId?: string },
+  input: { name?: string; folderId?: string; favorite?: boolean },
 ) => parse<BoardSummary>(await send("PATCH", encodeURIComponent(id), input));
 
-export const deleteBoard = async (id: string) => {
-  const response = await send("DELETE", encodeURIComponent(id));
+export const deleteBoard = async (id: string, { purge = false } = {}) => {
+  const response = await send(
+    "DELETE",
+    `${encodeURIComponent(id)}${purge ? "?purge=1" : ""}`,
+  );
   if (!response.ok) {
     throw new Error(`could not delete the board: ${response.status}`);
   }
 };
+
+export const restoreBoard = async (id: string) =>
+  parse<BoardSummary>(await send("POST", `${encodeURIComponent(id)}/restore`));
+
+export const duplicateBoard = async (id: string) =>
+  parse<BoardSummary>(
+    await send("POST", `${encodeURIComponent(id)}/duplicate`),
+  );
 
 export const createFolder = async (name: string) =>
   parse<FolderSummary>(await send("POST", "folders", { name }));
@@ -147,6 +164,7 @@ export type OpenBoard = {
   id: string;
   name: string;
   roomKey: string;
+  roomId: string;
   revision: number;
   elements: readonly ExcalidrawElement[];
 };
@@ -175,8 +193,9 @@ export const loadBoard = async (id: string): Promise<OpenBoard | null> => {
 
   return {
     id,
-    name: "",
+    name: scene.name,
     roomKey: scene.roomKey,
+    roomId: scene.roomId,
     revision: scene.revision,
     elements,
   };

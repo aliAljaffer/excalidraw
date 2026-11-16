@@ -85,8 +85,11 @@ CREATE TABLE IF NOT EXISTS boards (
 -- A small PNG of the board, shown in the gallery. Derived data: never bumped
 -- into updated_at.
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS preview bytea;
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS favorite boolean NOT NULL DEFAULT false;
+ALTER TABLE boards ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE INDEX IF NOT EXISTS boards_room_idx ON boards (room_id);
 CREATE INDEX IF NOT EXISTS boards_folder_idx ON boards (folder_id);
+CREATE INDEX IF NOT EXISTS boards_deleted_idx ON boards (deleted_at);
 `
 
 var (
@@ -401,6 +404,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /api/boards", s.createBoard)
 	mux.HandleFunc("PATCH /api/boards/{id}", s.updateBoard)
 	mux.HandleFunc("DELETE /api/boards/{id}", s.deleteBoard)
+	mux.HandleFunc("POST /api/boards/{id}/restore", s.restoreBoard)
+	mux.HandleFunc("POST /api/boards/{id}/duplicate", s.duplicateBoard)
 	mux.HandleFunc("GET /api/boards/{id}/scene", s.getBoardScene)
 	mux.HandleFunc("PUT /api/boards/{id}/scene", s.putBoardScene)
 	mux.HandleFunc("GET /api/boards/{id}/preview", s.getBoardPreview)

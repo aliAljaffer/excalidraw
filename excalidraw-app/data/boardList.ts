@@ -2,26 +2,44 @@ import type { BoardSummary } from "./boards";
 
 export type BoardSort = "recent" | "name";
 
+export type BoardView = {
+  folderId: string | null;
+  favorites: boolean;
+  trash: boolean;
+};
+
 export const filterAndSortBoards = (
   boards: readonly BoardSummary[],
-  folderId: string | null,
+  view: BoardView,
   query: string,
   sort: BoardSort,
 ) => {
   const needle = query.trim().toLowerCase();
   return boards
     .filter((board) => {
-      if (folderId !== null && board.folderId !== folderId) {
+      if (view.trash !== (board.deletedAt !== null)) {
+        return false;
+      }
+      if (!view.trash && !view.favorites) {
+        if (view.folderId !== null && board.folderId !== view.folderId) {
+          return false;
+        }
+      }
+      if (!view.trash && view.favorites && !board.favorite) {
         return false;
       }
       return !needle || board.name.toLowerCase().includes(needle);
     })
-    .sort((a, b) =>
-      sort === "name"
-        ? a.name.localeCompare(b.name, undefined, {
-            numeric: true,
-            sensitivity: "base",
-          })
-        : b.updatedAt.localeCompare(a.updatedAt),
-    );
+    .sort((a, b) => {
+      if (sort === "name") {
+        return a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+      }
+      if (view.trash) {
+        return (b.deletedAt ?? "").localeCompare(a.deletedAt ?? "");
+      }
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
 };
