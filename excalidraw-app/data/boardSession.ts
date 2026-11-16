@@ -25,6 +25,7 @@ type BoardSession = {
   roomId: string;
   roomKey: string;
   revision: number;
+  savedVersion: number;
   dirty: boolean;
   status: BoardSaveStatus;
   lastElements: readonly OrderedExcalidrawElement[];
@@ -153,6 +154,7 @@ export const startBoardSession = (args: {
     roomId: args.roomId,
     roomKey: args.roomKey,
     revision: args.revision,
+    savedVersion: getSceneVersion(args.elements),
     dirty: false,
     status: "saved",
     lastElements: args.elements,
@@ -202,6 +204,7 @@ const write = async (elements: readonly OrderedExcalidrawElement[]) => {
       elements,
     });
     current.revision = revision;
+    current.savedVersion = getSceneVersion(elements);
     // a change made while this request was in flight still needs a save
     current.dirty = current.lastElements !== elements;
     if (!current.dirty) {
@@ -224,6 +227,7 @@ const write = async (elements: readonly OrderedExcalidrawElement[]) => {
       revision: fresh.revision,
       elements,
     });
+    current.savedVersion = getSceneVersion(elements);
     current.dirty = current.lastElements !== elements;
     if (!current.dirty) {
       setStatus("saved");
@@ -249,6 +253,13 @@ export const saveBoardNow = async (
     await inFlight.catch(() => {});
   }
   if (!session) {
+    return;
+  }
+  if (
+    !keepalive &&
+    !session.dirty &&
+    getSceneVersion(target) === session.savedVersion
+  ) {
     return;
   }
 
@@ -297,12 +308,21 @@ export const queueBoardSave = (
     return;
   }
   if (initialVersion !== null) {
-    const version = getSceneVersion(elements);
+    const expected = initialVersion;
     initialVersion = null;
-    if (
-      version === session.revision ||
-      version === getSceneVersion(session.lastElements)
-    ) {
+    if (getSceneVersion(elements) === expected) {
+      session.lastElements = elements;
+      return;
+    }
+  }
+  if (!session.dirty) {
+    // appState changes reuse the scene array, so this skips the version scan
+    if (elements === session.lastElements) {
+      return;
+    }
+    if (getSceneVersion(elements) === session.savedVersion) {
+      // adopt the editor's array so later appState changes take the fast path
+      session.lastElements = elements;
       return;
     }
   }
