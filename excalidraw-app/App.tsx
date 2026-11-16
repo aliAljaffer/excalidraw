@@ -115,6 +115,7 @@ import {
 } from "./data";
 
 import { updateStaleImageStatuses } from "./data/FileManager";
+import { getBoardFileManager } from "./data/boardFiles";
 import { FileStatusStore } from "./data/fileStatusStore";
 import {
   importFromLocalStorage,
@@ -770,11 +771,10 @@ const ExcalidrawWrapper = () => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
       LocalData.flushSave();
 
+      const fileManager = getBoardFileManager() ?? LocalData.fileStorage;
       if (
         excalidrawAPI &&
-        LocalData.fileStorage.shouldPreventUnload(
-          excalidrawAPI.getSceneElements(),
-        )
+        fileManager.shouldPreventUnload(excalidrawAPI.getSceneElements())
       ) {
         if (import.meta.env.VITE_APP_DISABLE_PREVENT_UNLOAD !== "true") {
           preventUnload(event);
@@ -800,6 +800,50 @@ const ExcalidrawWrapper = () => {
       collabAPI.syncElements(elements);
     } else if (getBoardSession()) {
       queueBoardSave(elements);
+      const manager = getBoardFileManager();
+      if (
+        manager &&
+        elements.some((element) => isInitializedImageElement(element))
+      ) {
+        void manager
+          .saveFiles({ elements, files })
+          .then(({ savedFiles, erroredFiles }) => {
+            if (erroredFiles.size) {
+              FileStatusStore.updateStatuses(
+                [...erroredFiles.keys()].map(
+                  (id) => [id, "error"] as [FileId, "error"],
+                ),
+              );
+            }
+            if (!excalidrawAPI || !savedFiles.size) {
+              return;
+            }
+            let didChange = false;
+            const next = excalidrawAPI
+              .getSceneElementsIncludingDeleted()
+              .map((element) => {
+                if (manager.shouldUpdateImageElementStatus(element)) {
+                  const newElement = newElementWith(element, {
+                    status: "saved",
+                  });
+                  if (newElement !== element) {
+                    didChange = true;
+                  }
+                  return newElement;
+                }
+                return element;
+              });
+            if (didChange) {
+              excalidrawAPI.updateScene({
+                elements: next,
+                captureUpdate: CaptureUpdateAction.NEVER,
+              });
+            }
+          })
+          .catch((error) => {
+            console.error("board image upload failed", error);
+          });
+      }
     }
 
     // this check is redundant, but since this is a hot path, it's best

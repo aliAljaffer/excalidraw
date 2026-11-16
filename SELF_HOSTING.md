@@ -35,6 +35,8 @@ Everything else is upstream Excalidraw.
 | `POST` | `/api/boards/{id}/restore` | Restore a trashed board |
 | `POST` | `/api/boards/{id}/duplicate` | Copy a board, its room scene, files and preview |
 | `GET` | `/api/boards/{id}/scene` | The encrypted scene, its room id, room key and name |
+| `PUT` | `/api/boards/{id}/files/{fileId}` | Store one encrypted board image |
+| `GET` | `/api/boards/{id}/files/{fileId}` | Return one encrypted board image |
 | `PUT` | `/api/boards/{id}/scene` | Save the scene, rejected on a stale revision |
 | `POST` | `/api/boards/folders` | Create a folder |
 | `PATCH` | `/api/boards/folders/{id}` | Rename a folder |
