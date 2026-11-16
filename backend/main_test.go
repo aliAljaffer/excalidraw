@@ -470,6 +470,11 @@ func TestTrashedBoardIsPurgedAfterAMonth(t *testing.T) {
 		"SELECT room_id FROM boards WHERE id = $1", created.ID).Scan(&roomID); err != nil {
 		t.Fatal(err)
 	}
+	if rec := do(t, s, ownerRequest("PUT", "/api/boards/"+created.ID+"/scene",
+		`{"ciphertext":"`+base64.StdEncoding.EncodeToString([]byte("scene"))+`","iv":"`+
+			base64.StdEncoding.EncodeToString([]byte("iv"))+`","sceneVersion":1,"revision":0}`)); rec.Code != http.StatusOK {
+		t.Fatalf("write scene: got %d (%s)", rec.Code, rec.Body)
+	}
 	if _, err := s.db.Exec(context.Background(),
 		"UPDATE boards SET deleted_at = now() - interval '31 days' WHERE id = $1", created.ID); err != nil {
 		t.Fatal(err)

@@ -118,13 +118,18 @@ func (s *server) listBoards(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Trashed boards are purged a month after deletion. Rooms are shared with
-	// collaboration, so only drop the ones no board points at any more.
+	// collaboration, so only drop the ones no live board points at any more.
 	if _, err := s.db.Exec(ctx,
-		`WITH purged AS (
-		   DELETE FROM boards WHERE deleted_at < now() - interval '30 days' RETURNING room_id
-		 )
-		 DELETE FROM rooms r WHERE r.room_id IN (SELECT room_id FROM purged)
-		   AND NOT EXISTS (SELECT 1 FROM boards b WHERE b.room_id = r.room_id)`); err != nil {
+		`DELETE FROM rooms r
+		 WHERE r.room_id IN (SELECT room_id FROM boards WHERE deleted_at < now() - interval '30 days')
+		   AND NOT EXISTS (
+		     SELECT 1 FROM boards b WHERE b.room_id = r.room_id
+		       AND (b.deleted_at IS NULL OR b.deleted_at >= now() - interval '30 days')
+		   )`); err != nil {
+		log.Printf("purge trashed board rooms: %v", err)
+	}
+	if _, err := s.db.Exec(ctx,
+		"DELETE FROM boards WHERE deleted_at < now() - interval '30 days'"); err != nil {
 		log.Printf("purge trashed boards: %v", err)
 	}
 
